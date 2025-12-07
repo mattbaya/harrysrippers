@@ -773,6 +773,126 @@ function updateMp3Metadata($filepath, $metadata, $sourceUrl = '') {
             color: #666;
             font-size: 10px;
         }
+
+        .about-link {
+            color: white;
+            text-decoration: none;
+            font-size: 13px;
+            opacity: 0.9;
+            transition: opacity 0.3s;
+            cursor: pointer;
+            display: inline-block;
+            margin-top: 5px;
+        }
+
+        .about-link:hover {
+            opacity: 1;
+            text-decoration: underline;
+        }
+
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0,0,0,0.5);
+            overflow: auto;
+        }
+
+        .modal.active {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+
+        .modal-content {
+            background-color: white;
+            border-radius: 15px;
+            padding: 30px;
+            max-width: 800px;
+            width: 100%;
+            max-height: 90vh;
+            overflow-y: auto;
+            position: relative;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.3);
+        }
+
+        .modal-close {
+            position: absolute;
+            top: 15px;
+            right: 20px;
+            font-size: 28px;
+            font-weight: bold;
+            color: #999;
+            cursor: pointer;
+            transition: color 0.3s;
+        }
+
+        .modal-close:hover {
+            color: #333;
+        }
+
+        .readme-content h1 {
+            color: #333;
+            margin-bottom: 15px;
+            font-size: 28px;
+        }
+
+        .readme-content h2 {
+            color: #667eea;
+            margin-top: 25px;
+            margin-bottom: 12px;
+            font-size: 20px;
+        }
+
+        .readme-content h3 {
+            color: #555;
+            margin-top: 20px;
+            margin-bottom: 10px;
+            font-size: 16px;
+        }
+
+        .readme-content p {
+            color: #666;
+            line-height: 1.6;
+            margin-bottom: 12px;
+        }
+
+        .readme-content ul {
+            color: #666;
+            line-height: 1.8;
+            margin-bottom: 12px;
+            margin-left: 25px;
+        }
+
+        .readme-content code {
+            background: #f5f5f5;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-family: monospace;
+            font-size: 13px;
+        }
+
+        .readme-content pre {
+            background: #f5f5f5;
+            padding: 15px;
+            border-radius: 6px;
+            overflow-x: auto;
+            margin-bottom: 15px;
+        }
+
+        .readme-content pre code {
+            background: none;
+            padding: 0;
+        }
+
+        .readme-content strong {
+            color: #333;
+        }
     </style>
 </head>
 <body>
@@ -780,6 +900,7 @@ function updateMp3Metadata($filepath, $metadata, $sourceUrl = '') {
         <div class="header">
             <h1>🎵 Harry's Rippers</h1>
             <p>Convert videos to MP3 audio files</p>
+            <a href="#" class="about-link" onclick="openAboutModal(); return false;">ℹ️ About this application</a>
         </div>
 
         <div class="columns">
@@ -987,6 +1108,81 @@ function updateMp3Metadata($filepath, $metadata, $sourceUrl = '') {
                 form.submit();
             }
         }
+
+        // About modal functions
+        function openAboutModal() {
+            const modal = document.getElementById('aboutModal');
+            modal.classList.add('active');
+            loadReadme();
+        }
+
+        function closeAboutModal() {
+            const modal = document.getElementById('aboutModal');
+            modal.classList.remove('active');
+        }
+
+        function loadReadme() {
+            fetch('README.md')
+                .then(response => response.text())
+                .then(markdown => {
+                    const html = parseMarkdown(markdown);
+                    document.getElementById('readmeContent').innerHTML = html;
+                })
+                .catch(error => {
+                    document.getElementById('readmeContent').innerHTML = '<p>Error loading README content.</p>';
+                });
+        }
+
+        // Simple markdown to HTML parser
+        function parseMarkdown(markdown) {
+            let html = markdown;
+
+            // Headers
+            html = html.replace(/^### (.*$)/gim, '<h3>$1</h3>');
+            html = html.replace(/^## (.*$)/gim, '<h2>$1</h2>');
+            html = html.replace(/^# (.*$)/gim, '<h1>$1</h1>');
+
+            // Bold
+            html = html.replace(/\*\*(.*?)\*\*/gim, '<strong>$1</strong>');
+
+            // Code blocks
+            html = html.replace(/```([\s\S]*?)```/gim, '<pre><code>$1</code></pre>');
+
+            // Inline code
+            html = html.replace(/`([^`]+)`/gim, '<code>$1</code>');
+
+            // Lists
+            html = html.replace(/^\- (.*$)/gim, '<li>$1</li>');
+            html = html.replace(/(<li>.*<\/li>)/gims, '<ul>$1</ul>');
+
+            // Paragraphs
+            html = html.split('\n\n').map(para => {
+                if (!para.match(/^<(h|ul|pre|li)/)) {
+                    return '<p>' + para + '</p>';
+                }
+                return para;
+            }).join('\n');
+
+            return html;
+        }
+
+        // Close modal when clicking outside
+        window.onclick = function(event) {
+            const modal = document.getElementById('aboutModal');
+            if (event.target == modal) {
+                closeAboutModal();
+            }
+        }
     </script>
+
+    <!-- About Modal -->
+    <div id="aboutModal" class="modal">
+        <div class="modal-content">
+            <span class="modal-close" onclick="closeAboutModal()">&times;</span>
+            <div id="readmeContent" class="readme-content">
+                <p>Loading...</p>
+            </div>
+        </div>
+    </div>
 </body>
 </html>
