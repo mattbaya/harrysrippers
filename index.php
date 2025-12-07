@@ -185,6 +185,76 @@ if (isset($_POST['restore_title']) && !empty($_POST['filename']) && !empty($_POS
     exit;
 }
 
+// Handle audio trimming
+if (isset($_POST['trim_audio']) && !empty($_POST['filename'])) {
+    $filename = basename($_POST['filename']);
+    $startTime = trim($_POST['start_time']);
+    $endTime = trim($_POST['end_time']);
+
+    $filePath = $downloadsDir . '/' . $filename;
+
+    if (file_exists($filePath)) {
+        // Parse time strings (supports MM:SS, M:SS, or seconds)
+        function parseTimeToSeconds($timeStr) {
+            $timeStr = trim($timeStr);
+            if (empty($timeStr)) {
+                return null;
+            }
+
+            // If it contains a colon, parse as MM:SS
+            if (strpos($timeStr, ':') !== false) {
+                $parts = explode(':', $timeStr);
+                if (count($parts) == 2) {
+                    return intval($parts[0]) * 60 + intval($parts[1]);
+                }
+            }
+
+            // Otherwise treat as seconds
+            return floatval($timeStr);
+        }
+
+        $startSeconds = parseTimeToSeconds($startTime);
+        $endSeconds = parseTimeToSeconds($endTime);
+
+        // Create temporary output file
+        $tempFile = $downloadsDir . '/temp_' . time() . '_' . $filename;
+
+        // Build ffmpeg command
+        $ffmpegCommand = sprintf(
+            '%s -i %s',
+            escapeshellarg($ffmpegPath),
+            escapeshellarg($filePath)
+        );
+
+        if ($startSeconds !== null) {
+            $ffmpegCommand .= sprintf(' -ss %s', escapeshellarg($startSeconds));
+        }
+
+        if ($endSeconds !== null) {
+            $ffmpegCommand .= sprintf(' -to %s', escapeshellarg($endSeconds));
+        }
+
+        $ffmpegCommand .= sprintf(' -c copy %s 2>&1', escapeshellarg($tempFile));
+
+        // Execute trim
+        exec($ffmpegCommand, $trimOutput, $trimReturnCode);
+
+        if ($trimReturnCode === 0 && file_exists($tempFile)) {
+            // Replace original with trimmed version
+            unlink($filePath);
+            rename($tempFile, $filePath);
+        } else {
+            // Clean up temp file if it exists
+            if (file_exists($tempFile)) {
+                unlink($tempFile);
+            }
+        }
+    }
+
+    header('Location: ' . $_SERVER['PHP_SELF']);
+    exit;
+}
+
 // Clean up old files
 $files = glob($downloadsDir . '/*.mp3');
 if ($files) {
@@ -377,6 +447,36 @@ function formatTimeAgo($timestamp) {
     } else {
         return date('M j, Y g:i a', $timestamp);
     }
+}
+
+// Function to extract YouTube thumbnail URL from video URL
+function getYouTubeThumbnail($url) {
+    if (empty($url)) {
+        return '';
+    }
+
+    // Extract video ID from various YouTube URL formats
+    $videoId = '';
+
+    // Pattern 1: youtube.com/watch?v=VIDEO_ID
+    if (preg_match('/[?&]v=([^&]+)/', $url, $matches)) {
+        $videoId = $matches[1];
+    }
+    // Pattern 2: youtu.be/VIDEO_ID
+    elseif (preg_match('/youtu\.be\/([^?]+)/', $url, $matches)) {
+        $videoId = $matches[1];
+    }
+    // Pattern 3: youtube.com/embed/VIDEO_ID
+    elseif (preg_match('/youtube\.com\/embed\/([^?]+)/', $url, $matches)) {
+        $videoId = $matches[1];
+    }
+
+    if ($videoId) {
+        // Use high quality default thumbnail
+        return "https://img.youtube.com/vi/{$videoId}/hqdefault.jpg";
+    }
+
+    return '';
 }
 
 // Function to parse video title using OpenAI API
@@ -651,9 +751,6 @@ function updateMp3Metadata($filepath, $metadata, $sourceUrl = '') {
         }
 
         .file-item {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
             padding: 12px;
             border-bottom: 1px solid #e1e8ed;
             transition: background 0.2s;
@@ -665,6 +762,23 @@ function updateMp3Metadata($filepath, $metadata, $sourceUrl = '') {
 
         .file-item:last-child {
             border-bottom: none;
+        }
+
+        .file-item-main {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .file-summary {
+            margin-top: 10px;
+            padding-top: 10px;
+            padding-left: 84px; /* Align with text (thumbnail width + margin) */
+            border-top: 1px solid #f0f0f0;
+            font-size: 12px;
+            color: #666;
+            font-style: italic;
+            line-height: 1.5;
         }
 
         .file-thumbnail {
@@ -1102,42 +1216,38 @@ function updateMp3Metadata($filepath, $metadata, $sourceUrl = '') {
                     <?php else: ?>
                         <?php foreach ($availableFiles as $file): ?>
                             <div class="file-item">
-                                <?php if (!empty($file['image_url'])): ?>
-                                    <img src="<?php echo htmlspecialchars($file['image_url']); ?>"
-                                         alt="Album art"
-                                         class="file-thumbnail"
-                                         onerror="this.style.display='none'">
-                                <?php endif; ?>
-                                <div class="file-info">
-                                    <?php if (!empty($file['video_title'])): ?>
-                                        <div style="font-size: 11px; color: #999; margin-bottom: 3px;">
-                                            Original: <?php echo htmlspecialchars($file['video_title']); ?>
-                                        </div>
+                                <div class="file-item-main">
+                                    <?php
+                                        // Use album/artist image if available, otherwise fallback to YouTube thumbnail
+                                        $thumbnailUrl = !empty($file['image_url']) ? $file['image_url'] : getYouTubeThumbnail($file['original_url']);
+                                    ?>
+                                    <?php if (!empty($thumbnailUrl)): ?>
+                                        <img src="<?php echo htmlspecialchars($thumbnailUrl); ?>"
+                                             alt="Album art"
+                                             class="file-thumbnail"
+                                             onerror="this.style.display='none'">
                                     <?php endif; ?>
+                                    <div class="file-info">
+                                        <?php if (!empty($file['video_title'])): ?>
+                                            <div style="font-size: 11px; color: #999; margin-bottom: 3px;">
+                                                Original: <?php echo htmlspecialchars($file['video_title']); ?>
+                                            </div>
+                                        <?php endif; ?>
 
-                                    <?php if (!empty($file['artist']) && !empty($file['title'])): ?>
-                                        <div class="file-name">
-                                            <strong><?php echo htmlspecialchars($file['artist']); ?></strong> - <?php echo htmlspecialchars($file['title']); ?>
-                                            <?php if (!empty($file['album'])): ?>
-                                                <span style="color: #999; font-size: 11px;">(<?php echo htmlspecialchars($file['album']); ?>)</span>
-                                            <?php endif; ?>
-                                        </div>
-                                        <div class="file-size" style="font-size: 10px; color: #999;">File: <?php echo htmlspecialchars($file['name']); ?></div>
-                                    <?php else: ?>
-                                        <div class="file-name"><?php echo htmlspecialchars($file['name']); ?></div>
-                                    <?php endif; ?>
-                                    <div class="file-size"><?php echo formatFileSize($file['size']); ?> • Downloaded <?php echo formatTimeAgo($file['downloaded_at']); ?></div>
-
-                                    <?php if (!empty($file['summary'])): ?>
-                                        <div style="font-size: 12px; color: #666; margin-top: 5px; font-style: italic;">
-                                            <?php echo htmlspecialchars($file['summary']); ?>
-                                            <?php if (!empty($file['lyrics_url'])): ?>
-                                                • <a href="<?php echo htmlspecialchars($file['lyrics_url']); ?>" target="_blank" style="color: #667eea; text-decoration: none;">Lyrics</a>
-                                            <?php endif; ?>
-                                        </div>
-                                    <?php endif; ?>
-                                </div>
-                                <div class="file-actions">
+                                        <?php if (!empty($file['artist']) && !empty($file['title'])): ?>
+                                            <div class="file-name">
+                                                <strong><?php echo htmlspecialchars($file['artist']); ?></strong> - <?php echo htmlspecialchars($file['title']); ?>
+                                                <?php if (!empty($file['album'])): ?>
+                                                    <span style="color: #999; font-size: 11px;">(<?php echo htmlspecialchars($file['album']); ?>)</span>
+                                                <?php endif; ?>
+                                            </div>
+                                            <div class="file-size" style="font-size: 10px; color: #999;">File: <?php echo htmlspecialchars($file['name']); ?></div>
+                                        <?php else: ?>
+                                            <div class="file-name"><?php echo htmlspecialchars($file['name']); ?></div>
+                                        <?php endif; ?>
+                                        <div class="file-size"><?php echo formatFileSize($file['size']); ?> • Downloaded <?php echo formatTimeAgo($file['downloaded_at']); ?></div>
+                                    </div>
+                                    <div class="file-actions">
                                     <button class="play-btn"
                                             onclick="playAudio('<?php echo htmlspecialchars($file['url'], ENT_QUOTES); ?>', '<?php echo htmlspecialchars($file['name'], ENT_QUOTES); ?>')"
                                             title="Play audio">
@@ -1170,6 +1280,11 @@ function updateMp3Metadata($filepath, $metadata, $sourceUrl = '') {
                                             title="Rename file">
                                         ✏️
                                     </button>
+                                    <button class="edit-btn"
+                                            onclick="trimAudio('<?php echo htmlspecialchars($file['name'], ENT_QUOTES); ?>', '<?php echo htmlspecialchars($file['url'], ENT_QUOTES); ?>')"
+                                            title="Trim audio">
+                                        ✂️
+                                    </button>
                                     <a href="<?php echo htmlspecialchars($file['url']); ?>" class="download-btn" download>
                                         📥 Download
                                     </a>
@@ -1180,6 +1295,16 @@ function updateMp3Metadata($filepath, $metadata, $sourceUrl = '') {
                                         🗑️
                                     </a>
                                 </div>
+                                </div><!-- End file-item-main -->
+
+                                <?php if (!empty($file['summary'])): ?>
+                                    <div class="file-summary">
+                                        <?php echo htmlspecialchars($file['summary']); ?>
+                                        <?php if (!empty($file['lyrics_url'])): ?>
+                                            • <a href="<?php echo htmlspecialchars($file['lyrics_url']); ?>" target="_blank" style="color: #667eea; text-decoration: none;">Lyrics</a>
+                                        <?php endif; ?>
+                                    </div>
+                                <?php endif; ?>
                             </div>
                         <?php endforeach; ?>
                     <?php endif; ?>
@@ -1268,6 +1393,33 @@ function updateMp3Metadata($filepath, $metadata, $sourceUrl = '') {
 
         function closeMetadataModal() {
             const modal = document.getElementById('metadataModal');
+            modal.classList.remove('active');
+        }
+
+        function trimAudio(filename, url) {
+            const modal = document.getElementById('trimModal');
+            const audioPlayer = document.getElementById('trimAudioPlayer');
+            const durationSpan = document.getElementById('trimDuration');
+
+            document.getElementById('trimFilename').value = filename;
+            audioPlayer.src = url;
+
+            // Update duration when metadata loads
+            audioPlayer.addEventListener('loadedmetadata', function() {
+                const duration = Math.floor(audioPlayer.duration);
+                const minutes = Math.floor(duration / 60);
+                const seconds = duration % 60;
+                durationSpan.textContent = `${minutes}:${seconds.toString().padStart(2, '0')}`;
+            });
+
+            modal.classList.add('active');
+        }
+
+        function closeTrimModal() {
+            const modal = document.getElementById('trimModal');
+            const audioPlayer = document.getElementById('trimAudioPlayer');
+            audioPlayer.pause();
+            audioPlayer.src = '';
             modal.classList.remove('active');
         }
 
@@ -1406,6 +1558,40 @@ function updateMp3Metadata($filepath, $metadata, $sourceUrl = '') {
                 </div>
 
                 <button type="submit" style="width: 100%; margin-top: 10px;">Update Metadata</button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Trim Audio Modal -->
+    <div id="trimModal" class="modal">
+        <div class="modal-content">
+            <span class="modal-close" onclick="closeTrimModal()">&times;</span>
+            <h2 style="color: #333; margin-bottom: 20px;">✂️ Trim Audio</h2>
+
+            <div style="margin-bottom: 20px;">
+                <audio id="trimAudioPlayer" controls style="width: 100%; margin-bottom: 10px;"></audio>
+                <div style="font-size: 12px; color: #666;">
+                    Current duration: <span id="trimDuration">--:--</span>
+                </div>
+            </div>
+
+            <form method="POST" action="">
+                <input type="hidden" name="trim_audio" value="1">
+                <input type="hidden" name="filename" id="trimFilename">
+
+                <div class="form-group">
+                    <label for="trimStart">Start Time (seconds or MM:SS):</label>
+                    <input type="text" id="trimStart" name="start_time" placeholder="0 or 00:00" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+                    <div style="font-size: 11px; color: #999; margin-top: 3px;">Example: 5 or 00:05 or 1:30</div>
+                </div>
+
+                <div class="form-group">
+                    <label for="trimEnd">End Time (seconds or MM:SS, leave empty for end):</label>
+                    <input type="text" id="trimEnd" name="end_time" placeholder="Leave empty for end of file" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+                    <div style="font-size: 11px; color: #999; margin-top: 3px;">Example: 180 or 03:00 or leave empty</div>
+                </div>
+
+                <button type="submit" style="width: 100%; margin-top: 10px;">✂️ Trim Audio</button>
             </form>
         </div>
     </div>
