@@ -12,20 +12,22 @@ A web-based MP3 converter that downloads videos from YouTube and other platforms
 
 ### 🤖 AI-Powered Metadata Intelligence
 
-The application uses OpenAI's GPT-4o-mini to automatically parse video titles and extract meaningful metadata. This is one of the most powerful features of Harry's Rippers.
+The application uses OpenAI's GPT-4o-mini to automatically parse video information and extract meaningful metadata. This is one of the most powerful features of Harry's Rippers.
 
 **How It Works:**
-1. When you submit a video URL, the system first fetches the video's title (e.g., "The Beatles - Hey Jude (Remastered 2009)")
-2. The title is sent to ChatGPT with a specialized prompt asking it to parse and extract:
-   - **Artist name** (e.g., "The Beatles")
-   - **Song title** (e.g., "Hey Jude")
-   - **Album name** if mentioned (e.g., "Remastered 2009" or empty if not applicable)
+1. When you submit a video URL, the system fetches:
+   - The video's **title** (e.g., "Ripple (Grateful Dead) feat. Bill Kreutzmann | Playing For Change")
+   - The video's **description** (first 500 characters for context)
+2. Both the title and description are sent to ChatGPT with a specialized prompt asking it to parse and extract:
+   - **Artist name** - Who is ACTUALLY PERFORMING (crucial for covers - e.g., "Playing For Change" not "Grateful Dead")
+   - **Song title** (e.g., "Ripple")
+   - **Album name** if mentioned (or empty if not applicable)
    - **Song summary** - A brief 1-2 sentence description of the song (genre, mood, historical significance)
-   - **Lyrics link** - Direct URL to lyrics on sites like Genius or AZLyrics (if available)
-   - **Album/Artist image** - URL to album cover or artist photo from Wikipedia/Wikimedia Commons (if available)
-3. ChatGPT returns structured JSON data with the parsed information
+   - **Lyrics link** - Direct URL to lyrics on sites like Genius or AZLyrics (only if certain of the exact URL)
+3. ChatGPT analyzes both title and description to accurately identify the actual performer (especially important for cover songs)
 4. The application uses ffmpeg to embed metadata (artist/title/album/URL) into the MP3 file's ID3 tags
 5. Additional information (summary, lyrics link) is stored in the .meta file for display
+6. Video thumbnails are extracted from YouTube and displayed automatically
 
 **What This Means:**
 - Your downloaded MP3 files will show up correctly in iTunes, Spotify, and other music players
@@ -38,11 +40,11 @@ The application uses OpenAI's GPT-4o-mini to automatically parse video titles an
 
 #### Display & Organization
 - **Multi-Level Display**: Each file shows comprehensive information:
-  1. **Album/Artist Thumbnail**: 1-inch square image of album art or artist photo (left side)
+  1. **Video Thumbnail**: 1.5-inch square thumbnail from YouTube video (reliable and always available)
   2. **Original YouTube Title**: The raw title from the video (in small gray text)
   3. **Parsed Metadata**: Clean display as "**Artist** - Title (Album)"
   4. **Filename**: The actual file stored on disk
-  5. **AI-Generated Summary**: Brief description of the song in italics (genre, mood, significance)
+  5. **AI-Generated Summary**: Full-width description of the song in italics below action buttons (genre, mood, significance)
   6. **Lyrics Link**: Clickable link to lyrics on reputable sites (when available)
 - **Timestamp Tracking**: Shows when each file was downloaded with smart formatting:
   - "Just now" for files downloaded < 1 minute ago
@@ -66,6 +68,12 @@ Each file has multiple action buttons:
   - Sanitizes the title to be filesystem-safe
   - Preserves all metadata in the .meta file
 - **✏️ Rename**: Change the filename to anything you want
+- **✂️ Trim Audio**: Cut unwanted sections from the beginning or end of the audio
+  - Opens a modal with audio player and time inputs
+  - Supports both MM:SS format and seconds (e.g., "1:30" or "90")
+  - Uses ffmpeg to precisely trim the audio file
+  - Replaces the original file with the trimmed version
+  - Perfect for removing intros, outros, or unwanted sounds
 - **📥 Download**: Download the MP3 file to your computer
 - **🗑️ Delete**: Remove the file from the server
 
