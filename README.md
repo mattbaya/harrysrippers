@@ -23,7 +23,11 @@ The application uses OpenAI's GPT-4o-mini to automatically parse video informati
    - **Song title** (e.g., "Ripple")
    - **Album name** if mentioned (or empty if not applicable)
    - **Song summary** - A brief 1-2 sentence description of the song (genre, mood, historical significance)
-   - **Lyrics link** - Direct URL to lyrics on sites like Genius or AZLyrics (only if certain of the exact URL)
+   - **Lyrics link** - ChatGPT constructs direct URLs to lyrics on Genius or AZLyrics using standard URL formats:
+     - Genius: `https://genius.com/[Artist]-[song-title]-lyrics`
+     - AZLyrics: `https://www.azlyrics.com/lyrics/[artist]/[songtitle].html`
+     - Provides URLs for any recognizable song by constructing them from artist/title information
+     - Only skips for non-songs (instrumentals, sound effects, etc.)
 3. ChatGPT analyzes both title and description to accurately identify the actual performer (especially important for cover songs)
 4. The application uses ffmpeg to embed metadata (artist/title/album/URL) into the MP3 file's ID3 tags
 5. Additional information (summary, lyrics link) is stored in the .meta file for display
