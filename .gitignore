@@ -1,0 +1,4 @@
+.env
+downloads/*.mp3
+downloads/*.meta
+rip_log.json

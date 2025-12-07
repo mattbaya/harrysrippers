@@ -2,12 +2,46 @@
 // Set timezone
 date_default_timezone_set('America/New_York');
 
+// Load .env file
+function loadEnv($path) {
+    if (!file_exists($path)) {
+        return;
+    }
+
+    $lines = file($path, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+    foreach ($lines as $line) {
+        // Skip comments
+        if (strpos(trim($line), '#') === 0) {
+            continue;
+        }
+
+        // Parse key=value
+        if (strpos($line, '=') !== false) {
+            list($key, $value) = explode('=', $line, 2);
+            $key = trim($key);
+            $value = trim($value);
+
+            // Remove quotes if present
+            if (preg_match('/^(["\'])(.*)\\1$/', $value, $matches)) {
+                $value = $matches[2];
+            }
+
+            putenv("$key=$value");
+            $_ENV[$key] = $value;
+        }
+    }
+}
+
+loadEnv(__DIR__ . '/.env');
+
 // Configuration
 $downloadsDir = __DIR__ . '/downloads';
 $downloadsUrl = '/harrysrippers/downloads';
 $ytDlpPath = '/home/harry/bin/yt-dlp';
+$ffmpegPath = '/home/harry/bin/ffmpeg';
 $maxFileAge = 28800; // Delete files older than 8 hours
 $logFile = __DIR__ . '/rip_log.json';
+$openaiApiKey = getenv('OPENAI_API_KEY');
 
 // Function to add log entry
 function addLogEntry($url, $filename, $filesize, $status = 'success') {
@@ -115,16 +149,30 @@ if ($files) {
             $originalUrl = '';
 
             // Read metadata if exists
+            $downloadedAt = filemtime($file); // Fallback to file modification time
+            $artist = '';
+            $title = '';
+            $album = '';
             if (file_exists($metaPath)) {
                 $metaData = json_decode(file_get_contents($metaPath), true);
                 $originalUrl = isset($metaData['url']) ? $metaData['url'] : '';
+                if (isset($metaData['timestamp'])) {
+                    $downloadedAt = $metaData['timestamp'];
+                }
+                $artist = isset($metaData['artist']) ? $metaData['artist'] : '';
+                $title = isset($metaData['title']) ? $metaData['title'] : '';
+                $album = isset($metaData['album']) ? $metaData['album'] : '';
             }
 
             $availableFiles[] = [
                 'name' => $basename,
                 'size' => filesize($file),
                 'url' => $downloadsUrl . '/' . rawurlencode($basename),
-                'original_url' => $originalUrl
+                'original_url' => $originalUrl,
+                'downloaded_at' => $downloadedAt,
+                'artist' => $artist,
+                'title' => $title,
+                'album' => $album
             ];
         }
     }
@@ -153,6 +201,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_POST['url'])) {
         // Set PATH to include python3
         putenv('PATH=/home/harry/bin:' . getenv('PATH'));
 
+        // First, get video info to extract title
+        $videoTitle = '';
+        $infoCommand = sprintf(
+            '%s --print title --no-playlist %s 2>&1',
+            escapeshellarg($ytDlpPath),
+            escapeshellarg($url)
+        );
+        exec($infoCommand, $infoOutput, $infoReturnCode);
+        if ($infoReturnCode === 0 && !empty($infoOutput)) {
+            $videoTitle = trim(implode(' ', $infoOutput));
+        }
+
         // Get list of files before download
         $filesBefore = glob($downloadsDir . '/*.mp3');
 
@@ -178,9 +238,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_POST['url'])) {
                 $downloadLink = $downloadsUrl . '/' . rawurlencode($filename);
                 $success = 'Conversion successful!';
 
-                // Save metadata with original URL
+                // Parse video title with ChatGPT and update MP3 metadata
+                $parsedMetadata = null;
+                if (!empty($videoTitle) && !empty($openaiApiKey)) {
+                    $parsedMetadata = parseVideoTitle($videoTitle, $openaiApiKey);
+                    if ($parsedMetadata) {
+                        updateMp3Metadata($filepath, $parsedMetadata);
+                    }
+                }
+
+                // Save metadata with original URL and parsed info
                 $metaPath = $filepath . '.meta';
-                $metaData = ['url' => $url, 'timestamp' => time()];
+                $metaData = [
+                    'url' => $url,
+                    'timestamp' => time(),
+                    'video_title' => $videoTitle
+                ];
+                if ($parsedMetadata) {
+                    $metaData['artist'] = $parsedMetadata['artist'] ?? '';
+                    $metaData['title'] = $parsedMetadata['title'] ?? '';
+                    $metaData['album'] = $parsedMetadata['album'] ?? '';
+                }
                 file_put_contents($metaPath, json_encode($metaData));
 
                 // Add to log
@@ -208,6 +286,113 @@ function formatFileSize($bytes) {
     } else {
         return $bytes . ' bytes';
     }
+}
+
+function formatTimeAgo($timestamp) {
+    $diff = time() - $timestamp;
+
+    if ($diff < 60) {
+        return 'Just now';
+    } elseif ($diff < 3600) {
+        $mins = floor($diff / 60);
+        return $mins . ' min' . ($mins > 1 ? 's' : '') . ' ago';
+    } elseif ($diff < 86400) {
+        $hours = floor($diff / 3600);
+        return $hours . ' hour' . ($hours > 1 ? 's' : '') . ' ago';
+    } elseif ($diff < 604800) {
+        $days = floor($diff / 86400);
+        return $days . ' day' . ($days > 1 ? 's' : '') . ' ago';
+    } else {
+        return date('M j, Y g:i a', $timestamp);
+    }
+}
+
+// Function to parse video title using OpenAI API
+function parseVideoTitle($videoTitle, $apiKey) {
+    if (empty($apiKey)) {
+        return null;
+    }
+
+    $prompt = "Parse this video title and extract the artist name, song title, and album name (if mentioned). Return ONLY a JSON object with keys 'artist', 'title', and 'album'. If album is not mentioned, use an empty string. Video title: " . $videoTitle;
+
+    $data = [
+        'model' => 'gpt-4o-mini',
+        'messages' => [
+            ['role' => 'user', 'content' => $prompt]
+        ],
+        'temperature' => 0.3,
+        'max_tokens' => 200
+    ];
+
+    $ch = curl_init('https://api.openai.com/v1/chat/completions');
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_POST, true);
+    curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($data));
+    curl_setopt($ch, CURLOPT_HTTPHEADER, [
+        'Content-Type: application/json',
+        'Authorization: Bearer ' . $apiKey
+    ]);
+
+    $response = curl_exec($ch);
+    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    curl_close($ch);
+
+    if ($httpCode !== 200) {
+        return null;
+    }
+
+    $result = json_decode($response, true);
+    if (isset($result['choices'][0]['message']['content'])) {
+        $content = $result['choices'][0]['message']['content'];
+        // Extract JSON from the response (handle markdown code blocks)
+        if (preg_match('/\{[^}]+\}/', $content, $matches)) {
+            return json_decode($matches[0], true);
+        }
+        return json_decode($content, true);
+    }
+
+    return null;
+}
+
+// Function to update MP3 metadata using ffmpeg
+function updateMp3Metadata($filepath, $metadata) {
+    global $ffmpegPath;
+
+    if (empty($metadata)) {
+        return false;
+    }
+
+    $tempFile = $filepath . '.temp.mp3';
+    $artist = isset($metadata['artist']) ? $metadata['artist'] : '';
+    $title = isset($metadata['title']) ? $metadata['title'] : '';
+    $album = isset($metadata['album']) ? $metadata['album'] : '';
+
+    // Build ffmpeg command to update metadata
+    $command = sprintf(
+        '%s -i %s -metadata artist=%s -metadata title=%s -metadata album=%s -codec copy %s 2>&1',
+        escapeshellarg($ffmpegPath),
+        escapeshellarg($filepath),
+        escapeshellarg($artist),
+        escapeshellarg($title),
+        escapeshellarg($album),
+        escapeshellarg($tempFile)
+    );
+
+    exec($command, $output, $returnCode);
+
+    if ($returnCode === 0 && file_exists($tempFile)) {
+        // Replace original file with updated file
+        unlink($filepath);
+        rename($tempFile, $filepath);
+        return true;
+    }
+
+    // Clean up temp file if it exists
+    if (file_exists($tempFile)) {
+        unlink($tempFile);
+    }
+
+    return false;
 }
 ?>
 <!DOCTYPE html>
@@ -684,8 +869,18 @@ function formatFileSize($bytes) {
                         <?php foreach ($availableFiles as $file): ?>
                             <div class="file-item">
                                 <div class="file-info">
-                                    <div class="file-name"><?php echo htmlspecialchars($file['name']); ?></div>
-                                    <div class="file-size"><?php echo formatFileSize($file['size']); ?></div>
+                                    <?php if (!empty($file['artist']) && !empty($file['title'])): ?>
+                                        <div class="file-name">
+                                            <strong><?php echo htmlspecialchars($file['artist']); ?></strong> - <?php echo htmlspecialchars($file['title']); ?>
+                                            <?php if (!empty($file['album'])): ?>
+                                                <span style="color: #999; font-size: 11px;">(<?php echo htmlspecialchars($file['album']); ?>)</span>
+                                            <?php endif; ?>
+                                        </div>
+                                        <div class="file-size" style="font-size: 10px; color: #999;"><?php echo htmlspecialchars($file['name']); ?></div>
+                                    <?php else: ?>
+                                        <div class="file-name"><?php echo htmlspecialchars($file['name']); ?></div>
+                                    <?php endif; ?>
+                                    <div class="file-size"><?php echo formatFileSize($file['size']); ?> • Downloaded <?php echo formatTimeAgo($file['downloaded_at']); ?></div>
                                 </div>
                                 <div class="file-actions">
                                     <button class="play-btn"
