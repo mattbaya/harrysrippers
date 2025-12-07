@@ -1,0 +1,11 @@
+# Set default index file
+DirectoryIndex index.php
+
+# Protect sensitive files
+<FilesMatch "^\.">
+    Require all denied
+</FilesMatch>
+
+# Set PHP limits (if needed)
+php_value memory_limit 256M
+php_value max_execution_time 300

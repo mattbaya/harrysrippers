@@ -1,0 +1,7 @@
+# Prevent directory listing
+Options -Indexes
+
+# Allow downloading audio files
+<FilesMatch "\.(mp3|m4a)$">
+    Require all granted
+</FilesMatch>
