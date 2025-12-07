@@ -1291,6 +1291,14 @@ function updateMp3Metadata($filepath, $metadata, $sourceUrl = '') {
                                             ▶
                                         </a>
                                     <?php endif; ?>
+                                    <?php if (!empty($file['lyrics_url'])): ?>
+                                        <a href="<?php echo htmlspecialchars($file['lyrics_url']); ?>"
+                                           class="edit-btn"
+                                           target="_blank"
+                                           title="View lyrics">
+                                            📝
+                                        </a>
+                                    <?php endif; ?>
                                     <?php if (!empty($file['artist']) || !empty($file['title'])): ?>
                                         <button class="edit-btn"
                                                 onclick="editMetadata('<?php echo htmlspecialchars($file['name'], ENT_QUOTES); ?>', '<?php echo htmlspecialchars($file['artist'], ENT_QUOTES); ?>', '<?php echo htmlspecialchars($file['title'], ENT_QUOTES); ?>', '<?php echo htmlspecialchars($file['album'], ENT_QUOTES); ?>')"
@@ -1330,9 +1338,6 @@ function updateMp3Metadata($filepath, $metadata, $sourceUrl = '') {
                                 <?php if (!empty($file['summary'])): ?>
                                     <div class="file-summary">
                                         <?php echo htmlspecialchars($file['summary']); ?>
-                                        <?php if (!empty($file['lyrics_url'])): ?>
-                                            • <a href="<?php echo htmlspecialchars($file['lyrics_url']); ?>" target="_blank" style="color: #667eea; text-decoration: none;">Lyrics</a>
-                                        <?php endif; ?>
                                     </div>
                                 <?php endif; ?>
                             </div>
