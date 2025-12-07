@@ -340,8 +340,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_POST['url'])) {
         // Set PATH to include python3
         putenv('PATH=/home/harry/bin:' . getenv('PATH'));
 
-        // First, get video info to extract title
+        // First, get video info to extract title and description
         $videoTitle = '';
+        $videoDescription = '';
+
         $infoCommand = sprintf(
             '%s --print title --no-playlist %s 2>&1',
             escapeshellarg($ytDlpPath),
@@ -350,6 +352,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_POST['url'])) {
         exec($infoCommand, $infoOutput, $infoReturnCode);
         if ($infoReturnCode === 0 && !empty($infoOutput)) {
             $videoTitle = trim(implode(' ', $infoOutput));
+        }
+
+        // Get video description for better artist identification
+        $descCommand = sprintf(
+            '%s --print description --no-playlist %s 2>&1',
+            escapeshellarg($ytDlpPath),
+            escapeshellarg($url)
+        );
+        exec($descCommand, $descOutput, $descReturnCode);
+        if ($descReturnCode === 0 && !empty($descOutput)) {
+            $videoDescription = trim(implode("\n", $descOutput));
         }
 
         // Get list of files before download
@@ -380,7 +393,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_POST['url'])) {
                 // Parse video title with ChatGPT and update MP3 metadata
                 $parsedMetadata = null;
                 if (!empty($videoTitle) && !empty($openaiApiKey)) {
-                    $parsedMetadata = parseVideoTitle($videoTitle, $openaiApiKey);
+                    $parsedMetadata = parseVideoTitle($videoTitle, $openaiApiKey, $videoDescription);
                     if ($parsedMetadata) {
                         updateMp3Metadata($filepath, $parsedMetadata, $url);
                     }
@@ -480,13 +493,13 @@ function getYouTubeThumbnail($url) {
 }
 
 // Function to parse video title using OpenAI API
-function parseVideoTitle($videoTitle, $apiKey) {
+function parseVideoTitle($videoTitle, $apiKey, $description = '') {
     if (empty($apiKey)) {
         return null;
     }
 
-    $prompt = "Parse this video title and extract information about the song. Return ONLY a JSON object with these keys:
-- 'artist': Artist name
+    $prompt = "Parse this video information and extract information about the song. Pay special attention to who is ACTUALLY PERFORMING the song (especially for covers). Return ONLY a JSON object with these keys:
+- 'artist': The name of the artist/band ACTUALLY PERFORMING (not the original artist if it's a cover)
 - 'title': Song title
 - 'album': Album name (empty string if not mentioned)
 - 'summary': A brief 1-2 sentence description of the song (genre, mood, significance, etc.)
@@ -494,6 +507,10 @@ function parseVideoTitle($videoTitle, $apiKey) {
 - 'image_url': A direct URL to an album cover or artist image (preferably from Wikipedia, Wikimedia Commons, or other reliable source - empty string if not certain)
 
 Video title: " . $videoTitle;
+
+    if (!empty($description)) {
+        $prompt .= "\n\nVideo description: " . substr($description, 0, 500); // Limit description length
+    }
 
     $data = [
         'model' => 'gpt-4o-mini',
