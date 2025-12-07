@@ -243,7 +243,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_POST['url'])) {
                 if (!empty($videoTitle) && !empty($openaiApiKey)) {
                     $parsedMetadata = parseVideoTitle($videoTitle, $openaiApiKey);
                     if ($parsedMetadata) {
-                        updateMp3Metadata($filepath, $parsedMetadata);
+                        updateMp3Metadata($filepath, $parsedMetadata, $url);
                     }
                 }
 
@@ -355,7 +355,7 @@ function parseVideoTitle($videoTitle, $apiKey) {
 }
 
 // Function to update MP3 metadata using ffmpeg
-function updateMp3Metadata($filepath, $metadata) {
+function updateMp3Metadata($filepath, $metadata, $sourceUrl = '') {
     global $ffmpegPath;
 
     if (empty($metadata)) {
@@ -369,12 +369,13 @@ function updateMp3Metadata($filepath, $metadata) {
 
     // Build ffmpeg command to update metadata
     $command = sprintf(
-        '%s -i %s -metadata artist=%s -metadata title=%s -metadata album=%s -codec copy %s 2>&1',
+        '%s -i %s -metadata artist=%s -metadata title=%s -metadata album=%s -metadata comment=%s -codec copy %s 2>&1',
         escapeshellarg($ffmpegPath),
         escapeshellarg($filepath),
         escapeshellarg($artist),
         escapeshellarg($title),
         escapeshellarg($album),
+        escapeshellarg($sourceUrl),
         escapeshellarg($tempFile)
     );
 
