@@ -836,35 +836,38 @@ function updateMp3Metadata($filepath, $metadata, $sourceUrl = '') {
         }
 
         .download-btn {
-            background: #667eea;
-            color: white;
-            padding: 6px 15px;
-            border-radius: 5px;
+            background: white;
+            color: black;
+            padding: 8px 15px;
+            border-radius: 6px;
             text-decoration: none;
-            font-size: 12px;
+            font-size: 14px;
             font-weight: 600;
             white-space: nowrap;
-            transition: background 0.3s;
+            transition: all 0.2s;
+            border: 2px solid #667eea;
         }
 
         .download-btn:hover {
-            background: #764ba2;
+            background: #f0f4ff;
+            transform: scale(1.05);
         }
 
         .delete-btn {
-            background: #dc3545;
-            color: white;
-            padding: 6px 10px;
-            border-radius: 5px;
+            background: white;
+            color: black;
+            padding: 8px 12px;
+            border-radius: 6px;
             text-decoration: none;
-            font-size: 16px;
-            transition: background 0.3s;
+            font-size: 20px;
+            transition: all 0.2s;
             cursor: pointer;
-            border: none;
+            border: 2px solid #dc3545;
         }
 
         .delete-btn:hover {
-            background: #c82333;
+            background: #fff5f5;
+            transform: scale(1.1);
         }
 
         .no-files {
@@ -882,51 +885,54 @@ function updateMp3Metadata($filepath, $metadata, $sourceUrl = '') {
         }
 
         .play-btn {
-            background: #28a745;
-            color: white;
-            padding: 6px 10px;
-            border-radius: 5px;
+            background: white;
+            color: black;
+            padding: 8px 12px;
+            border-radius: 6px;
             text-decoration: none;
-            font-size: 16px;
-            transition: background 0.3s;
+            font-size: 20px;
+            transition: all 0.2s;
             cursor: pointer;
-            border: none;
+            border: 2px solid #28a745;
         }
 
         .play-btn:hover {
-            background: #218838;
+            background: #f0f8f0;
+            transform: scale(1.1);
         }
 
         .youtube-btn {
-            background: #ff0000;
-            color: white;
-            padding: 6px 10px;
-            border-radius: 5px;
+            background: white;
+            color: black;
+            padding: 8px 12px;
+            border-radius: 6px;
             text-decoration: none;
-            font-size: 16px;
-            transition: background 0.3s;
+            font-size: 20px;
+            transition: all 0.2s;
             cursor: pointer;
-            border: none;
+            border: 2px solid #ff0000;
         }
 
         .youtube-btn:hover {
-            background: #cc0000;
+            background: #fff5f5;
+            transform: scale(1.1);
         }
 
         .edit-btn {
-            background: #ffc107;
-            color: white;
-            padding: 6px 10px;
-            border-radius: 5px;
+            background: white;
+            color: black;
+            padding: 8px 12px;
+            border-radius: 6px;
             text-decoration: none;
-            font-size: 16px;
-            transition: background 0.3s;
+            font-size: 20px;
+            transition: all 0.2s;
             cursor: pointer;
-            border: none;
+            border: 2px solid #666;
         }
 
         .edit-btn:hover {
-            background: #e0a800;
+            background: #f8f8f8;
+            transform: scale(1.1);
         }
 
         .audio-player {
