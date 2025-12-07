@@ -504,7 +504,6 @@ function parseVideoTitle($videoTitle, $apiKey, $description = '') {
 - 'album': Album name (empty string if not mentioned)
 - 'summary': A brief 1-2 sentence description of the song (genre, mood, significance, etc.)
 - 'lyrics_url': A direct link to lyrics on a reputable site like genius.com or azlyrics.com (empty string if you're not certain of the exact URL)
-- 'image_url': A direct URL to an image - ALWAYS provide an image URL. Try to find: (1) album cover, (2) artist photo, (3) if nothing specific is found, search for any related image about the song/artist/genre that would be visually representative. Use Wikipedia, Wikimedia Commons, or other reliable sources. This field should RARELY be empty.
 
 Video title: " . $videoTitle;
 
@@ -1237,8 +1236,8 @@ function updateMp3Metadata($filepath, $metadata, $sourceUrl = '') {
                             <div class="file-item">
                                 <div class="file-item-main">
                                     <?php
-                                        // Use album/artist image if available, otherwise fallback to YouTube thumbnail
-                                        $thumbnailUrl = !empty($file['image_url']) ? $file['image_url'] : getYouTubeThumbnail($file['original_url']);
+                                        // Use YouTube thumbnail (most reliable)
+                                        $thumbnailUrl = getYouTubeThumbnail($file['original_url']);
                                     ?>
                                     <?php if (!empty($thumbnailUrl)): ?>
                                         <img src="<?php echo htmlspecialchars($thumbnailUrl); ?>"
