@@ -39,7 +39,7 @@ $downloadsDir = __DIR__ . '/downloads';
 $downloadsUrl = '/harrysrippers/downloads';
 $ytDlpPath = '/home/harry/bin/yt-dlp';
 $ffmpegPath = '/home/harry/bin/ffmpeg';
-$maxFileAge = 28800; // Delete files older than 8 hours
+$maxFileAge = 864000; // Delete files older than 10 days
 $logFile = __DIR__ . '/rip_log.json';
 $openaiApiKey = getenv('OPENAI_API_KEY');
 
@@ -211,6 +211,8 @@ if ($files) {
             $title = '';
             $album = '';
             $videoTitle = '';
+            $summary = '';
+            $lyricsUrl = '';
             if (file_exists($metaPath)) {
                 $metaData = json_decode(file_get_contents($metaPath), true);
                 $originalUrl = isset($metaData['url']) ? $metaData['url'] : '';
@@ -221,6 +223,8 @@ if ($files) {
                 $title = isset($metaData['title']) ? $metaData['title'] : '';
                 $album = isset($metaData['album']) ? $metaData['album'] : '';
                 $videoTitle = isset($metaData['video_title']) ? $metaData['video_title'] : '';
+                $summary = isset($metaData['summary']) ? $metaData['summary'] : '';
+                $lyricsUrl = isset($metaData['lyrics_url']) ? $metaData['lyrics_url'] : '';
             }
 
             $availableFiles[] = [
@@ -232,7 +236,9 @@ if ($files) {
                 'artist' => $artist,
                 'title' => $title,
                 'album' => $album,
-                'video_title' => $videoTitle
+                'video_title' => $videoTitle,
+                'summary' => $summary,
+                'lyrics_url' => $lyricsUrl
             ];
         }
     }
@@ -318,6 +324,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_POST['url'])) {
                     $metaData['artist'] = $parsedMetadata['artist'] ?? '';
                     $metaData['title'] = $parsedMetadata['title'] ?? '';
                     $metaData['album'] = $parsedMetadata['album'] ?? '';
+                    $metaData['summary'] = $parsedMetadata['summary'] ?? '';
+                    $metaData['lyrics_url'] = $parsedMetadata['lyrics_url'] ?? '';
                 }
                 file_put_contents($metaPath, json_encode($metaData));
 
@@ -373,7 +381,14 @@ function parseVideoTitle($videoTitle, $apiKey) {
         return null;
     }
 
-    $prompt = "Parse this video title and extract the artist name, song title, and album name (if mentioned). Return ONLY a JSON object with keys 'artist', 'title', and 'album'. If album is not mentioned, use an empty string. Video title: " . $videoTitle;
+    $prompt = "Parse this video title and extract information about the song. Return ONLY a JSON object with these keys:
+- 'artist': Artist name
+- 'title': Song title
+- 'album': Album name (empty string if not mentioned)
+- 'summary': A brief 1-2 sentence description of the song (genre, mood, significance, etc.)
+- 'lyrics_url': A direct link to lyrics on a reputable site like genius.com or azlyrics.com (empty string if you're not certain of the exact URL)
+
+Video title: " . $videoTitle;
 
     $data = [
         'model' => 'gpt-4o-mini',
@@ -381,7 +396,7 @@ function parseVideoTitle($videoTitle, $apiKey) {
             ['role' => 'user', 'content' => $prompt]
         ],
         'temperature' => 0.3,
-        'max_tokens' => 200
+        'max_tokens' => 400
     ];
 
     $ch = curl_init('https://api.openai.com/v1/chat/completions');
@@ -405,10 +420,29 @@ function parseVideoTitle($videoTitle, $apiKey) {
     if (isset($result['choices'][0]['message']['content'])) {
         $content = $result['choices'][0]['message']['content'];
         // Extract JSON from the response (handle markdown code blocks)
-        if (preg_match('/\{[^}]+\}/', $content, $matches)) {
-            return json_decode($matches[0], true);
+        if (preg_match('/\{[\s\S]*?\}/', $content, $matches)) {
+            $parsed = json_decode($matches[0], true);
+            if ($parsed) {
+                // Ensure all expected keys exist
+                return [
+                    'artist' => $parsed['artist'] ?? '',
+                    'title' => $parsed['title'] ?? '',
+                    'album' => $parsed['album'] ?? '',
+                    'summary' => $parsed['summary'] ?? '',
+                    'lyrics_url' => $parsed['lyrics_url'] ?? ''
+                ];
+            }
         }
-        return json_decode($content, true);
+        $parsed = json_decode($content, true);
+        if ($parsed) {
+            return [
+                'artist' => $parsed['artist'] ?? '',
+                'title' => $parsed['title'] ?? '',
+                'album' => $parsed['album'] ?? '',
+                'summary' => $parsed['summary'] ?? '',
+                'lyrics_url' => $parsed['lyrics_url'] ?? ''
+            ];
+        }
     }
 
     return null;
@@ -997,7 +1031,7 @@ function updateMp3Metadata($filepath, $metadata, $sourceUrl = '') {
                 </form>
 
                 <div class="info">
-                    <strong>Note:</strong> Files are automatically deleted after 8 hours. Supports YouTube and many other sites.
+                    <strong>Note:</strong> Files are automatically deleted after 10 days. Supports YouTube and many other sites.
                 </div>
 
                 <!-- Rip Log -->
@@ -1069,6 +1103,15 @@ function updateMp3Metadata($filepath, $metadata, $sourceUrl = '') {
                                         <div class="file-name"><?php echo htmlspecialchars($file['name']); ?></div>
                                     <?php endif; ?>
                                     <div class="file-size"><?php echo formatFileSize($file['size']); ?> • Downloaded <?php echo formatTimeAgo($file['downloaded_at']); ?></div>
+
+                                    <?php if (!empty($file['summary'])): ?>
+                                        <div style="font-size: 12px; color: #666; margin-top: 5px; font-style: italic;">
+                                            <?php echo htmlspecialchars($file['summary']); ?>
+                                            <?php if (!empty($file['lyrics_url'])): ?>
+                                                • <a href="<?php echo htmlspecialchars($file['lyrics_url']); ?>" target="_blank" style="color: #667eea; text-decoration: none;">Lyrics</a>
+                                            <?php endif; ?>
+                                        </div>
+                                    <?php endif; ?>
                                 </div>
                                 <div class="file-actions">
                                     <button class="play-btn"

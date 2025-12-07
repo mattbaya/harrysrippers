@@ -20,22 +20,28 @@ The application uses OpenAI's GPT-4o-mini to automatically parse video titles an
    - **Artist name** (e.g., "The Beatles")
    - **Song title** (e.g., "Hey Jude")
    - **Album name** if mentioned (e.g., "Remastered 2009" or empty if not applicable)
+   - **Song summary** - A brief 1-2 sentence description of the song (genre, mood, historical significance)
+   - **Lyrics link** - Direct URL to lyrics on sites like Genius or AZLyrics (if available)
 3. ChatGPT returns structured JSON data with the parsed information
-4. The application uses ffmpeg to embed this metadata into the MP3 file's ID3 tags
-5. The source URL is also stored in the MP3's comment field for reference
+4. The application uses ffmpeg to embed metadata (artist/title/album/URL) into the MP3 file's ID3 tags
+5. Additional information (summary, lyrics link) is stored in the .meta file for display
 
 **What This Means:**
 - Your downloaded MP3 files will show up correctly in iTunes, Spotify, and other music players
 - Files are automatically organized with proper artist/song/album information
-- No manual tagging required - it's all done automatically
+- Each song displays an AI-generated summary describing the song
+- Direct access to lyrics via clickable link (when available)
+- No manual tagging or searching required - it's all done automatically
 
 ### 📁 Advanced File Management
 
 #### Display & Organization
-- **Triple-Level Display**: Each file shows three pieces of information:
+- **Multi-Level Display**: Each file shows comprehensive information:
   1. **Original YouTube Title**: The raw title from the video (in small gray text)
   2. **Parsed Metadata**: Clean display as "**Artist** - Title (Album)"
   3. **Filename**: The actual file stored on disk
+  4. **AI-Generated Summary**: Brief description of the song in italics (genre, mood, significance)
+  5. **Lyrics Link**: Clickable link to lyrics on reputable sites (when available)
 - **Timestamp Tracking**: Shows when each file was downloaded with smart formatting:
   - "Just now" for files downloaded < 1 minute ago
   - "5 mins ago" for recent downloads
@@ -98,7 +104,7 @@ Harry's Rippers uses a dual-metadata system to ensure your files are properly ta
 
 ### 🔒 Security & Privacy
 - API keys stored in `.env` file (not committed to git)
-- Automatic file cleanup after 8 hours
+- Automatic file cleanup after 10 days
 - Files stored securely on server
 
 ### 📊 Activity Logging
@@ -219,8 +225,10 @@ When you click the ↩️ **Restore Original Title** button:
    - Edit metadata
    - Restore title
    - Delete
+   - View summary
+   - Access lyrics
    ↓
-7. After 8 hours: Automatic cleanup
+7. After 10 days: Automatic cleanup
    (Files and .meta files deleted)
 ```
 
