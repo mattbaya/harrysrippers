@@ -790,12 +790,14 @@ function updateMp3Metadata($filepath, $metadata, $sourceUrl = '') {
         .file-summary {
             margin-top: 10px;
             padding-top: 10px;
-            padding-left: 123px; /* Align with text (thumbnail width 108px + margin 15px) */
-            border-top: 1px solid #f0f0f0;
-            font-size: 12px;
-            color: #666;
-            font-style: italic;
-            line-height: 1.5;
+            padding-left: 0;
+            padding-right: 0;
+            border-top: 1px solid #e0e0e0;
+            font-size: 14px;
+            color: #333;
+            font-style: normal;
+            line-height: 1.6;
+            text-align: left;
         }
 
         .file-thumbnail {
@@ -1240,9 +1242,11 @@ function updateMp3Metadata($filepath, $metadata, $sourceUrl = '') {
                                     ?>
                                     <?php if (!empty($thumbnailUrl)): ?>
                                         <img src="<?php echo htmlspecialchars($thumbnailUrl); ?>"
-                                             alt="Album art"
+                                             alt="<?php echo htmlspecialchars($file['artist'] . ' - ' . $file['title']); ?>"
                                              class="file-thumbnail"
-                                             onerror="this.style.display='none'">
+                                             onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%22108%22 height=%22108%22%3E%3Crect fill=%22%23e0e0e0%22 width=%22108%22 height=%22108%22/%3E%3Ctext x=%2254%22 y=%2254%22 text-anchor=%22middle%22 dominant-baseline=%22middle%22 font-family=%22Arial%22 font-size=%2240%22 fill=%22%23999%22%3E%F0%9F%8E%B5%3C/text%3E%3C/svg%3E'; this.onerror=null;">
+                                    <?php else: ?>
+                                        <div class="file-thumbnail" style="display: flex; align-items: center; justify-content: center; font-size: 40px;">🎵</div>
                                     <?php endif; ?>
                                     <div class="file-info">
                                         <?php if (!empty($file['video_title'])): ?>
