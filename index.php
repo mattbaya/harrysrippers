@@ -504,7 +504,7 @@ function parseVideoTitle($videoTitle, $apiKey, $description = '') {
 - 'album': Album name (empty string if not mentioned)
 - 'summary': A brief 1-2 sentence description of the song (genre, mood, significance, etc.)
 - 'lyrics_url': A direct link to lyrics on a reputable site like genius.com or azlyrics.com (empty string if you're not certain of the exact URL)
-- 'image_url': A direct URL to an album cover or artist image (preferably from Wikipedia, Wikimedia Commons, or other reliable source - empty string if not certain)
+- 'image_url': A direct URL to an image - ALWAYS provide an image URL. Try to find: (1) album cover, (2) artist photo, (3) if nothing specific is found, search for any related image about the song/artist/genre that would be visually representative. Use Wikipedia, Wikimedia Commons, or other reliable sources. This field should RARELY be empty.
 
 Video title: " . $videoTitle;
 
@@ -790,7 +790,7 @@ function updateMp3Metadata($filepath, $metadata, $sourceUrl = '') {
         .file-summary {
             margin-top: 10px;
             padding-top: 10px;
-            padding-left: 84px; /* Align with text (thumbnail width + margin) */
+            padding-left: 123px; /* Align with text (thumbnail width 108px + margin 15px) */
             border-top: 1px solid #f0f0f0;
             font-size: 12px;
             color: #666;
@@ -799,10 +799,10 @@ function updateMp3Metadata($filepath, $metadata, $sourceUrl = '') {
         }
 
         .file-thumbnail {
-            width: 72px;
-            height: 72px;
-            margin-right: 12px;
-            border-radius: 6px;
+            width: 108px;
+            height: 108px;
+            margin-right: 15px;
+            border-radius: 8px;
             object-fit: cover;
             flex-shrink: 0;
             background: #f0f0f0;
