@@ -1,11 +1,11 @@
 {
     "url": "https:\/\/www.youtube.com\/watch?v=0OxP5nrI6u8&list=RD0OxP5nrI6u8&start_radio=1",
     "timestamp": 1765088799,
-    "video_title": "Baby Driver - Simon Garfunkel Cover Live from The Bus",
-    "artist": "Simon & Garfunkel",
+    "video_title": "WARNING: [youtube] No supported JavaScript runtime could be found. YouTube extraction without a JS runtime has been deprecated, and some formats may be missing. See  https:\/\/github.com\/yt-dlp\/yt-dlp\/wiki\/EJS  for details on installing one. To silence this warning, you can use  --extractor-args \"youtube:player_client=default\" WARNING: [youtube] 0OxP5nrI6u8: Some web_safari client https formats have been skipped as they are missing a url. YouTube is forcing SABR streaming for this client. See  https:\/\/github.com\/yt-dlp\/yt-dlp\/issues\/12482  for more details WARNING: [youtube] 0OxP5nrI6u8: Some web client https formats have been skipped as they are missing a url. YouTube is forcing SABR streaming for this client. See  https:\/\/github.com\/yt-dlp\/yt-dlp\/issues\/12482  for more details Baby Driver - Simon & Garfunkel Cover (Live from The Bus)",
+    "artist": "The Bus",
     "title": "Baby Driver",
     "album": "",
-    "summary": "Baby Driver is a folk rock song that features upbeat melodies and introspective lyrics, often reflecting themes of love and longing. The live cover adds an energetic and fresh interpretation to the classic track.",
+    "summary": "A live cover performance of Simon & Garfunkel's classic song 'Baby Driver', showcasing a blend of folk and rock elements with a lively and engaging atmosphere.",
     "lyrics_url": "https:\/\/genius.com\/Simon-and-garfunkel-baby-driver-lyrics",
-    "image_url": "https:\/\/upload.wikimedia.org\/wikipedia\/en\/4\/4e\/Simon_%26_Garfunkel_-_Bookends.jpg"
+    "image_url": "https:\/\/upload.wikimedia.org\/wikipedia\/en\/0\/0d\/Simon_and_Garfunkel_-_Bookends.jpg"
 }

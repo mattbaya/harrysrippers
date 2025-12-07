@@ -1,11 +1,11 @@
 {
     "url": "https:\/\/www.youtube.com\/watch?v=YpUCGX1hwR4&list=RD6jNRRSBuPXQ&index=6",
     "timestamp": 1765088088,
-    "video_title": "Toad Bone - Light Up the Night",
+    "video_title": "WARNING: [youtube] No supported JavaScript runtime could be found. YouTube extraction without a JS runtime has been deprecated, and some formats may be missing. See  https:\/\/github.com\/yt-dlp\/yt-dlp\/wiki\/EJS  for details on installing one. To silence this warning, you can use  --extractor-args \"youtube:player_client=default\" WARNING: [youtube] YpUCGX1hwR4: Some web_safari client https formats have been skipped as they are missing a url. YouTube is forcing SABR streaming for this client. See  https:\/\/github.com\/yt-dlp\/yt-dlp\/issues\/12482  for more details WARNING: [youtube] YpUCGX1hwR4: Some web client https formats have been skipped as they are missing a url. YouTube is forcing SABR streaming for this client. See  https:\/\/github.com\/yt-dlp\/yt-dlp\/issues\/12482  for more details Toad Bone - Light Up the Night",
     "artist": "Toad Bone",
     "title": "Light Up the Night",
     "album": "",
-    "summary": "Light Up the Night is an upbeat, energetic song that blends elements of rock and pop, creating an uplifting atmosphere perfect for celebrations. The track encourages listeners to embrace joy and positivity.",
+    "summary": "A vibrant and energetic song that captures the essence of celebration and positivity, blending elements of rock and pop.",
     "lyrics_url": "",
-    "image_url": ""
+    "image_url": "https:\/\/upload.wikimedia.org\/wikipedia\/en\/4\/4e\/Toad_Bone_Album_Cover.jpg"
 }

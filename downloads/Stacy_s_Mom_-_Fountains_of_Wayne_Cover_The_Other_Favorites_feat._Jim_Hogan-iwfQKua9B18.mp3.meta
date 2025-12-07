@@ -1,11 +1,11 @@
 {
     "url": "https:\/\/www.youtube.com\/watch?v=iwfQKua9B18&list=RDiwfQKua9B18&start_radio=1",
     "timestamp": 1765088578,
-    "video_title": "Stacy s Mom - Fountains of Wayne Cover The Other Favorites feat. Jim Hogan",
+    "video_title": "WARNING: [youtube] No supported JavaScript runtime could be found. YouTube extraction without a JS runtime has been deprecated, and some formats may be missing. See  https:\/\/github.com\/yt-dlp\/yt-dlp\/wiki\/EJS  for details on installing one. To silence this warning, you can use  --extractor-args \"youtube:player_client=default\" WARNING: [youtube] iwfQKua9B18: Some web_safari client https formats have been skipped as they are missing a url. YouTube is forcing SABR streaming for this client. See  https:\/\/github.com\/yt-dlp\/yt-dlp\/issues\/12482  for more details WARNING: [youtube] iwfQKua9B18: Some web client https formats have been skipped as they are missing a url. YouTube is forcing SABR streaming for this client. See  https:\/\/github.com\/yt-dlp\/yt-dlp\/issues\/12482  for more details Stacy's Mom - Fountains of Wayne Cover (The Other Favorites feat. Jim Hogan)",
     "artist": "The Other Favorites feat. Jim Hogan",
     "title": "Stacy's Mom",
     "album": "",
-    "summary": "A cover of the iconic pop-rock song 'Stacy's Mom' by Fountains of Wayne, known for its catchy melody and humorous lyrics about infatuation. This rendition brings a fresh take on the nostalgic classic.",
+    "summary": "This cover of 'Stacy's Mom' by Fountains of Wayne features a fresh take on the pop-rock classic, blending playful lyrics with a modern acoustic style. The mood is light-hearted and nostalgic.",
     "lyrics_url": "https:\/\/genius.com\/Fountains-of-wayne-stacys-mom-lyrics",
-    "image_url": "https:\/\/upload.wikimedia.org\/wikipedia\/en\/9\/9e\/Fountains_of_Wayne_-_Stacys_Mom.jpg"
+    "image_url": "https:\/\/upload.wikimedia.org\/wikipedia\/en\/8\/8b\/Fountains_of_Wayne_-_Stacy%27s_Mom.jpg"
 }
