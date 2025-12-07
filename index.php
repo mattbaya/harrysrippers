@@ -795,7 +795,7 @@ function updateMp3Metadata($filepath, $metadata, $sourceUrl = '') {
             border-top: 1px solid #e0e0e0;
             font-size: 14px;
             color: #333;
-            font-style: normal;
+            font-style: italic;
             line-height: 1.6;
             text-align: left;
         }
