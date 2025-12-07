@@ -933,7 +933,7 @@ function updateMp3Metadata($filepath, $metadata, $sourceUrl = '') {
                         >
                     </div>
 
-                    <button type="submit">Convert to MP3</button>
+                    <button type="submit">Convert to MP3 (or press enter)</button>
                 </form>
 
                 <div class="info">

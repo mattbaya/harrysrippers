@@ -73,4 +73,4 @@ A web-based MP3 converter that downloads videos from YouTube and other platforms
 
 ## Credits
 
-Built with ❤️ using Claude Code
+Built with ❤️ using Claude Code, with a little help from Matthew Baya (matt@baya.net)
