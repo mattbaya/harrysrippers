@@ -345,7 +345,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_POST['url'])) {
         $videoDescription = '';
 
         $infoCommand = sprintf(
-            '%s --print title --no-playlist %s 2>&1',
+            '%s --print title --no-playlist %s 2>/dev/null',
             escapeshellarg($ytDlpPath),
             escapeshellarg($url)
         );
@@ -356,7 +356,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_POST['url'])) {
 
         // Get video description for better artist identification
         $descCommand = sprintf(
-            '%s --print description --no-playlist %s 2>&1',
+            '%s --print description --no-playlist %s 2>/dev/null',
             escapeshellarg($ytDlpPath),
             escapeshellarg($url)
         );

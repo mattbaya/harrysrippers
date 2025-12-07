@@ -1,7 +1,7 @@
 {
     "url": "https:\/\/www.youtube.com\/watch?v=xw0xffEwExI&list=RDxw0xffEwExI&start_radio=1",
     "timestamp": 1765088236,
-    "video_title": "WARNING: [youtube] No supported JavaScript runtime could be found. YouTube extraction without a JS runtime has been deprecated, and some formats may be missing. See  https:\/\/github.com\/yt-dlp\/yt-dlp\/wiki\/EJS  for details on installing one. To silence this warning, you can use  --extractor-args \"youtube:player_client=default\" WARNING: [youtube] xw0xffEwExI: Some web_safari client https formats have been skipped as they are missing a url. YouTube is forcing SABR streaming for this client. See  https:\/\/github.com\/yt-dlp\/yt-dlp\/issues\/12482  for more details WARNING: [youtube] xw0xffEwExI: Some web client https formats have been skipped as they are missing a url. YouTube is forcing SABR streaming for this client. See  https:\/\/github.com\/yt-dlp\/yt-dlp\/issues\/12482  for more details \u201cMr. Sandman\"  A Retro Jazzy Living Room Cover",
+    "video_title": "\u201cMr. Sandman\"  A Retro Jazzy Living Room Cover",
     "artist": "Retro Jazzy Living Room",
     "title": "Mr. Sandman",
     "album": "",

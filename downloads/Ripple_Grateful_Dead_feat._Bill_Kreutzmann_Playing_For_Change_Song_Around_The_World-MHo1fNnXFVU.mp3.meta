@@ -1,7 +1,7 @@
 {
     "url": "https:\/\/www.youtube.com\/watch?v=MHo1fNnXFVU&list=RDMHo1fNnXFVU&start_radio=1",
     "timestamp": 1765088360,
-    "video_title": "WARNING: [youtube] No supported JavaScript runtime could be found. YouTube extraction without a JS runtime has been deprecated, and some formats may be missing. See  https:\/\/github.com\/yt-dlp\/yt-dlp\/wiki\/EJS  for details on installing one. To silence this warning, you can use  --extractor-args \"youtube:player_client=default\" WARNING: [youtube] MHo1fNnXFVU: Some web_safari client https formats have been skipped as they are missing a url. YouTube is forcing SABR streaming for this client. See  https:\/\/github.com\/yt-dlp\/yt-dlp\/issues\/12482  for more details WARNING: [youtube] MHo1fNnXFVU: Some web client https formats have been skipped as they are missing a url. YouTube is forcing SABR streaming for this client. See  https:\/\/github.com\/yt-dlp\/yt-dlp\/issues\/12482  for more details Ripple (Grateful Dead) feat. Bill Kreutzmann | Playing For Change | Song Around The World",
+    "video_title": "Ripple (Grateful Dead) feat. Bill Kreutzmann | Playing For Change | Song Around The World",
     "artist": "Playing For Change",
     "title": "Ripple",
     "album": "",
