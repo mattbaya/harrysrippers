@@ -1,28 +1,100 @@
 # Harry's Rippers 🎵
 
-A web-based MP3 converter that downloads videos from YouTube and other platforms, converts them to MP3 format, and automatically adds intelligent metadata using AI.
+A web-based MP3 converter that downloads videos from YouTube and other platforms, converts them to MP3 format, and automatically adds intelligent metadata using AI. The application intelligently parses video titles to extract artist, song, and album information, then embeds this metadata directly into the MP3 files for proper organization in your music library.
 
 ## Features
 
 ### 🎬 Video to MP3 Conversion
-- Convert videos from YouTube and many other platforms to MP3 audio
-- Simple paste-and-convert interface
-- Support for Enter key to submit
+- **Multi-Platform Support**: Convert videos from YouTube and many other platforms to MP3 audio
+- **Simple Interface**: Paste a URL and click "Convert" (or press Enter)
+- **High-Quality Audio**: Downloads and converts to MP3 format using yt-dlp and ffmpeg
+- **Automatic Processing**: One-click conversion from video to tagged MP3 file
 
-### 🤖 AI-Powered Metadata
-- Automatically parses video titles using ChatGPT (GPT-4o-mini)
-- Extracts artist name, song title, and album information
-- Embeds metadata directly into MP3 ID3 tags
-- Stores source URL in MP3 comment field
+### 🤖 AI-Powered Metadata Intelligence
 
-### 📁 File Management
-- View all downloaded files with rich metadata display
-- Shows **Artist - Title (Album)** when available
-- Download timestamp tracking with "time ago" formatting
-- Built-in audio player for instant playback
-- Rename files directly in the interface
-- One-click file deletion
-- Link to original video source
+The application uses OpenAI's GPT-4o-mini to automatically parse video titles and extract meaningful metadata. This is one of the most powerful features of Harry's Rippers.
+
+**How It Works:**
+1. When you submit a video URL, the system first fetches the video's title (e.g., "The Beatles - Hey Jude (Remastered 2009)")
+2. The title is sent to ChatGPT with a specialized prompt asking it to parse and extract:
+   - **Artist name** (e.g., "The Beatles")
+   - **Song title** (e.g., "Hey Jude")
+   - **Album name** if mentioned (e.g., "Remastered 2009" or empty if not applicable)
+3. ChatGPT returns structured JSON data with the parsed information
+4. The application uses ffmpeg to embed this metadata into the MP3 file's ID3 tags
+5. The source URL is also stored in the MP3's comment field for reference
+
+**What This Means:**
+- Your downloaded MP3 files will show up correctly in iTunes, Spotify, and other music players
+- Files are automatically organized with proper artist/song/album information
+- No manual tagging required - it's all done automatically
+
+### 📁 Advanced File Management
+
+#### Display & Organization
+- **Triple-Level Display**: Each file shows three pieces of information:
+  1. **Original YouTube Title**: The raw title from the video (in small gray text)
+  2. **Parsed Metadata**: Clean display as "**Artist** - Title (Album)"
+  3. **Filename**: The actual file stored on disk
+- **Timestamp Tracking**: Shows when each file was downloaded with smart formatting:
+  - "Just now" for files downloaded < 1 minute ago
+  - "5 mins ago" for recent downloads
+  - "2 hours ago" for today's downloads
+  - "3 days ago" for this week
+  - Full date "Dec 7, 2025 3:45 pm" for older files
+- **File Size Display**: Shows file size in appropriate units (KB, MB, GB)
+
+#### Interactive Controls
+Each file has multiple action buttons:
+
+- **▶️ Play**: Built-in audio player for instant playback without downloading
+- **▶ View Original**: Link to the original YouTube/video source
+- **🏷️ Edit Metadata**: Manually edit artist, title, and album information
+  - Opens a modal with input fields pre-filled with current metadata
+  - Updates both the .meta file and the MP3's ID3 tags
+  - Perfect for fixing AI parsing errors or adding missing information
+- **↩️ Restore Original Title**: Rename the file back to the original YouTube title
+  - Useful if you want the filename to match the video title exactly
+  - Sanitizes the title to be filesystem-safe
+  - Preserves all metadata in the .meta file
+- **✏️ Rename**: Change the filename to anything you want
+- **📥 Download**: Download the MP3 file to your computer
+- **🗑️ Delete**: Remove the file from the server
+
+### 🔧 Metadata Management System
+
+Harry's Rippers uses a dual-metadata system to ensure your files are properly tagged:
+
+**1. .meta Files (Internal)**
+- Each MP3 has a corresponding `.meta` file (e.g., `song.mp3.meta`)
+- Stores JSON data including:
+  ```json
+  {
+    "url": "https://youtube.com/watch?v=...",
+    "timestamp": 1234567890,
+    "video_title": "Original Video Title",
+    "artist": "Artist Name",
+    "title": "Song Title",
+    "album": "Album Name"
+  }
+  ```
+- Used by the application to display rich information
+- Preserved during file renames
+
+**2. MP3 ID3 Tags (Embedded)**
+- Metadata is embedded directly into the MP3 file using ffmpeg
+- Standard ID3v2 tags are set:
+  - `artist`: Artist name
+  - `title`: Song title
+  - `album`: Album name
+  - `comment`: Original source URL
+- These tags work with any music player (iTunes, VLC, Spotify, etc.)
+- Travel with the file even after download
+
+**Why Both?**
+- .meta files allow the web interface to show rich information quickly
+- ID3 tags ensure the file is properly tagged for use anywhere
+- When you edit metadata, both are updated simultaneously
 
 ### 🔒 Security & Privacy
 - API keys stored in `.env` file (not committed to git)
@@ -62,14 +134,95 @@ A web-based MP3 converter that downloads videos from YouTube and other platforms
 - `rip_log.json` - Activity log
 - `.gitignore` - Excludes sensitive and temporary files
 
-## How It Works
+## How It Works: Complete Process Flow
 
-1. User submits a video URL
-2. System fetches video title using yt-dlp
-3. yt-dlp downloads and converts video to MP3
-4. ChatGPT parses the title to extract metadata
-5. ffmpeg embeds the metadata into the MP3 file
-6. File is ready for download with proper tags
+### Initial Download Process
+
+1. **User Input**: User pastes a video URL and clicks "Convert" (or presses Enter)
+
+2. **Video Information Gathering**:
+   - yt-dlp connects to the video platform
+   - Extracts the video title (e.g., "Queen - Bohemian Rhapsody (Official Video)")
+   - Title is stored for later processing
+
+3. **Download & Conversion**:
+   - yt-dlp downloads the video
+   - Extracts audio track
+   - Converts to MP3 format using ffmpeg
+   - Saves to `downloads/` directory with filename pattern: `{title}-{video_id}.mp3`
+
+4. **AI Metadata Parsing**:
+   - Video title is sent to OpenAI's GPT-4o-mini API
+   - Specialized prompt asks ChatGPT to parse the title into structured data
+   - ChatGPT returns JSON: `{"artist": "Queen", "title": "Bohemian Rhapsody", "album": ""}`
+   - If parsing fails or API is unavailable, file is still saved (just without parsed metadata)
+
+5. **Metadata Embedding**:
+   - ffmpeg updates the MP3 file's ID3 tags with:
+     - Artist, Title, Album from ChatGPT
+     - Comment field with original video URL
+   - Creates `.meta` file with complete information:
+     - Original URL
+     - Download timestamp
+     - Video title
+     - Parsed artist/title/album
+
+6. **Display**:
+   - File appears in the "Available Files" list
+   - Shows original title, parsed metadata, and filename
+   - All action buttons become available
+
+### Metadata Editing Process
+
+When you click the 🏷️ **Edit Metadata** button:
+
+1. Modal opens with form pre-filled with current artist, title, and album
+2. You can modify any field
+3. On submit:
+   - `.meta` file is updated with new values
+   - ffmpeg re-processes the MP3 file to update ID3 tags
+   - Page refreshes to show updated information
+4. The changes are permanent and embedded in the file
+
+### Restore Original Title Process
+
+When you click the ↩️ **Restore Original Title** button:
+
+1. Confirmation dialog shows the original video title
+2. On confirmation:
+   - Original title is sanitized for filesystem safety:
+     - Special characters replaced with underscores
+     - Spaces replaced with underscores
+     - `.mp3` extension ensured
+   - File is renamed on disk
+   - `.meta` file is also renamed to match
+   - All metadata is preserved
+3. Page refreshes showing the renamed file
+
+### File Lifecycle
+
+```
+1. Video URL submitted
+   ↓
+2. Download + Convert to MP3
+   ↓
+3. AI parses title → metadata
+   ↓
+4. Embed metadata in MP3 (ID3 tags)
+   ↓
+5. Create .meta file
+   ↓
+6. File available for:
+   - Play/Stream
+   - Download
+   - Rename
+   - Edit metadata
+   - Restore title
+   - Delete
+   ↓
+7. After 8 hours: Automatic cleanup
+   (Files and .meta files deleted)
+```
 
 ## Credits
 

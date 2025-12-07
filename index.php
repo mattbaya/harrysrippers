@@ -128,6 +128,63 @@ if (isset($_POST['rename']) && !empty($_POST['old_name']) && !empty($_POST['new_
     exit;
 }
 
+// Handle metadata update
+if (isset($_POST['update_metadata']) && !empty($_POST['filename'])) {
+    $filename = basename($_POST['filename']);
+    $filepath = $downloadsDir . '/' . $filename;
+    $metaPath = $filepath . '.meta';
+
+    if (file_exists($filepath) && file_exists($metaPath)) {
+        $metaData = json_decode(file_get_contents($metaPath), true);
+        if ($metaData) {
+            $metaData['artist'] = $_POST['artist'] ?? '';
+            $metaData['title'] = $_POST['title'] ?? '';
+            $metaData['album'] = $_POST['album'] ?? '';
+            file_put_contents($metaPath, json_encode($metaData));
+
+            // Update MP3 file metadata
+            $metadata = [
+                'artist' => $metaData['artist'],
+                'title' => $metaData['title'],
+                'album' => $metaData['album']
+            ];
+            $sourceUrl = $metaData['url'] ?? '';
+            updateMp3Metadata($filepath, $metadata, $sourceUrl);
+        }
+    }
+    header('Location: ' . $_SERVER['PHP_SELF']);
+    exit;
+}
+
+// Handle restore original title
+if (isset($_POST['restore_title']) && !empty($_POST['filename']) && !empty($_POST['original_title'])) {
+    $filename = basename($_POST['filename']);
+    $originalTitle = $_POST['original_title'];
+
+    // Sanitize the title for filename
+    $newFilename = preg_replace('/[^a-zA-Z0-9_\-\. ]/', '_', $originalTitle);
+    $newFilename = preg_replace('/\s+/', '_', $newFilename);
+
+    // Ensure .mp3 extension
+    if (!preg_match('/\.mp3$/i', $newFilename)) {
+        $newFilename .= '.mp3';
+    }
+
+    $oldPath = $downloadsDir . '/' . $filename;
+    $newPath = $downloadsDir . '/' . $newFilename;
+    $oldMetaPath = $oldPath . '.meta';
+    $newMetaPath = $newPath . '.meta';
+
+    if (file_exists($oldPath) && !file_exists($newPath)) {
+        rename($oldPath, $newPath);
+        if (file_exists($oldMetaPath)) {
+            rename($oldMetaPath, $newMetaPath);
+        }
+    }
+    header('Location: ' . $_SERVER['PHP_SELF']);
+    exit;
+}
+
 // Clean up old files
 $files = glob($downloadsDir . '/*.mp3');
 if ($files) {
@@ -153,6 +210,7 @@ if ($files) {
             $artist = '';
             $title = '';
             $album = '';
+            $videoTitle = '';
             if (file_exists($metaPath)) {
                 $metaData = json_decode(file_get_contents($metaPath), true);
                 $originalUrl = isset($metaData['url']) ? $metaData['url'] : '';
@@ -162,6 +220,7 @@ if ($files) {
                 $artist = isset($metaData['artist']) ? $metaData['artist'] : '';
                 $title = isset($metaData['title']) ? $metaData['title'] : '';
                 $album = isset($metaData['album']) ? $metaData['album'] : '';
+                $videoTitle = isset($metaData['video_title']) ? $metaData['video_title'] : '';
             }
 
             $availableFiles[] = [
@@ -172,7 +231,8 @@ if ($files) {
                 'downloaded_at' => $downloadedAt,
                 'artist' => $artist,
                 'title' => $title,
-                'album' => $album
+                'album' => $album,
+                'video_title' => $videoTitle
             ];
         }
     }
@@ -991,6 +1051,12 @@ function updateMp3Metadata($filepath, $metadata, $sourceUrl = '') {
                         <?php foreach ($availableFiles as $file): ?>
                             <div class="file-item">
                                 <div class="file-info">
+                                    <?php if (!empty($file['video_title'])): ?>
+                                        <div style="font-size: 11px; color: #999; margin-bottom: 3px;">
+                                            Original: <?php echo htmlspecialchars($file['video_title']); ?>
+                                        </div>
+                                    <?php endif; ?>
+
                                     <?php if (!empty($file['artist']) && !empty($file['title'])): ?>
                                         <div class="file-name">
                                             <strong><?php echo htmlspecialchars($file['artist']); ?></strong> - <?php echo htmlspecialchars($file['title']); ?>
@@ -998,7 +1064,7 @@ function updateMp3Metadata($filepath, $metadata, $sourceUrl = '') {
                                                 <span style="color: #999; font-size: 11px;">(<?php echo htmlspecialchars($file['album']); ?>)</span>
                                             <?php endif; ?>
                                         </div>
-                                        <div class="file-size" style="font-size: 10px; color: #999;"><?php echo htmlspecialchars($file['name']); ?></div>
+                                        <div class="file-size" style="font-size: 10px; color: #999;">File: <?php echo htmlspecialchars($file['name']); ?></div>
                                     <?php else: ?>
                                         <div class="file-name"><?php echo htmlspecialchars($file['name']); ?></div>
                                     <?php endif; ?>
@@ -1017,6 +1083,20 @@ function updateMp3Metadata($filepath, $metadata, $sourceUrl = '') {
                                            title="View original video">
                                             ▶
                                         </a>
+                                    <?php endif; ?>
+                                    <?php if (!empty($file['artist']) || !empty($file['title'])): ?>
+                                        <button class="edit-btn"
+                                                onclick="editMetadata('<?php echo htmlspecialchars($file['name'], ENT_QUOTES); ?>', '<?php echo htmlspecialchars($file['artist'], ENT_QUOTES); ?>', '<?php echo htmlspecialchars($file['title'], ENT_QUOTES); ?>', '<?php echo htmlspecialchars($file['album'], ENT_QUOTES); ?>')"
+                                                title="Edit metadata">
+                                            🏷️
+                                        </button>
+                                    <?php endif; ?>
+                                    <?php if (!empty($file['video_title'])): ?>
+                                        <button class="edit-btn"
+                                                onclick="restoreOriginalTitle('<?php echo htmlspecialchars($file['name'], ENT_QUOTES); ?>', '<?php echo htmlspecialchars($file['video_title'], ENT_QUOTES); ?>')"
+                                                title="Restore original title">
+                                            ↩️
+                                        </button>
                                     <?php endif; ?>
                                     <button class="edit-btn"
                                             onclick="editFilename('<?php echo htmlspecialchars($file['name'], ENT_QUOTES); ?>')"
@@ -1109,6 +1189,50 @@ function updateMp3Metadata($filepath, $metadata, $sourceUrl = '') {
             }
         }
 
+        // Metadata editing functions
+        function editMetadata(filename, artist, title, album) {
+            const modal = document.getElementById('metadataModal');
+            document.getElementById('metaFilename').value = filename;
+            document.getElementById('metaArtist').value = artist;
+            document.getElementById('metaTitle').value = title;
+            document.getElementById('metaAlbum').value = album;
+            modal.classList.add('active');
+        }
+
+        function closeMetadataModal() {
+            const modal = document.getElementById('metadataModal');
+            modal.classList.remove('active');
+        }
+
+        function restoreOriginalTitle(filename, originalTitle) {
+            if (confirm('Restore filename to original title: "' + originalTitle + '"?')) {
+                const form = document.createElement('form');
+                form.method = 'POST';
+                form.action = '';
+
+                const restoreInput = document.createElement('input');
+                restoreInput.type = 'hidden';
+                restoreInput.name = 'restore_title';
+                restoreInput.value = '1';
+                form.appendChild(restoreInput);
+
+                const filenameInput = document.createElement('input');
+                filenameInput.type = 'hidden';
+                filenameInput.name = 'filename';
+                filenameInput.value = filename;
+                form.appendChild(filenameInput);
+
+                const titleInput = document.createElement('input');
+                titleInput.type = 'hidden';
+                titleInput.name = 'original_title';
+                titleInput.value = originalTitle;
+                form.appendChild(titleInput);
+
+                document.body.appendChild(form);
+                form.submit();
+            }
+        }
+
         // About modal functions
         function openAboutModal() {
             const modal = document.getElementById('aboutModal');
@@ -1168,9 +1292,14 @@ function updateMp3Metadata($filepath, $metadata, $sourceUrl = '') {
 
         // Close modal when clicking outside
         window.onclick = function(event) {
-            const modal = document.getElementById('aboutModal');
-            if (event.target == modal) {
+            const aboutModal = document.getElementById('aboutModal');
+            const metadataModal = document.getElementById('metadataModal');
+
+            if (event.target == aboutModal) {
                 closeAboutModal();
+            }
+            if (event.target == metadataModal) {
+                closeMetadataModal();
             }
         }
     </script>
@@ -1182,6 +1311,35 @@ function updateMp3Metadata($filepath, $metadata, $sourceUrl = '') {
             <div id="readmeContent" class="readme-content">
                 <p>Loading...</p>
             </div>
+        </div>
+    </div>
+
+    <!-- Metadata Edit Modal -->
+    <div id="metadataModal" class="modal">
+        <div class="modal-content">
+            <span class="modal-close" onclick="closeMetadataModal()">&times;</span>
+            <h2 style="color: #333; margin-bottom: 20px;">Edit Metadata</h2>
+            <form method="POST" action="">
+                <input type="hidden" name="update_metadata" value="1">
+                <input type="hidden" name="filename" id="metaFilename">
+
+                <div class="form-group">
+                    <label for="metaArtist">Artist:</label>
+                    <input type="text" id="metaArtist" name="artist" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+                </div>
+
+                <div class="form-group">
+                    <label for="metaTitle">Title:</label>
+                    <input type="text" id="metaTitle" name="title" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+                </div>
+
+                <div class="form-group">
+                    <label for="metaAlbum">Album:</label>
+                    <input type="text" id="metaAlbum" name="album" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+                </div>
+
+                <button type="submit" style="width: 100%; margin-top: 10px;">Update Metadata</button>
+            </form>
         </div>
     </div>
 </body>
