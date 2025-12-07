@@ -213,6 +213,7 @@ if ($files) {
             $videoTitle = '';
             $summary = '';
             $lyricsUrl = '';
+            $imageUrl = '';
             if (file_exists($metaPath)) {
                 $metaData = json_decode(file_get_contents($metaPath), true);
                 $originalUrl = isset($metaData['url']) ? $metaData['url'] : '';
@@ -225,6 +226,7 @@ if ($files) {
                 $videoTitle = isset($metaData['video_title']) ? $metaData['video_title'] : '';
                 $summary = isset($metaData['summary']) ? $metaData['summary'] : '';
                 $lyricsUrl = isset($metaData['lyrics_url']) ? $metaData['lyrics_url'] : '';
+                $imageUrl = isset($metaData['image_url']) ? $metaData['image_url'] : '';
             }
 
             $availableFiles[] = [
@@ -238,7 +240,8 @@ if ($files) {
                 'album' => $album,
                 'video_title' => $videoTitle,
                 'summary' => $summary,
-                'lyrics_url' => $lyricsUrl
+                'lyrics_url' => $lyricsUrl,
+                'image_url' => $imageUrl
             ];
         }
     }
@@ -326,6 +329,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_POST['url'])) {
                     $metaData['album'] = $parsedMetadata['album'] ?? '';
                     $metaData['summary'] = $parsedMetadata['summary'] ?? '';
                     $metaData['lyrics_url'] = $parsedMetadata['lyrics_url'] ?? '';
+                    $metaData['image_url'] = $parsedMetadata['image_url'] ?? '';
                 }
                 file_put_contents($metaPath, json_encode($metaData));
 
@@ -387,6 +391,7 @@ function parseVideoTitle($videoTitle, $apiKey) {
 - 'album': Album name (empty string if not mentioned)
 - 'summary': A brief 1-2 sentence description of the song (genre, mood, significance, etc.)
 - 'lyrics_url': A direct link to lyrics on a reputable site like genius.com or azlyrics.com (empty string if you're not certain of the exact URL)
+- 'image_url': A direct URL to an album cover or artist image (preferably from Wikipedia, Wikimedia Commons, or other reliable source - empty string if not certain)
 
 Video title: " . $videoTitle;
 
@@ -429,7 +434,8 @@ Video title: " . $videoTitle;
                     'title' => $parsed['title'] ?? '',
                     'album' => $parsed['album'] ?? '',
                     'summary' => $parsed['summary'] ?? '',
-                    'lyrics_url' => $parsed['lyrics_url'] ?? ''
+                    'lyrics_url' => $parsed['lyrics_url'] ?? '',
+                    'image_url' => $parsed['image_url'] ?? ''
                 ];
             }
         }
@@ -440,7 +446,8 @@ Video title: " . $videoTitle;
                 'title' => $parsed['title'] ?? '',
                 'album' => $parsed['album'] ?? '',
                 'summary' => $parsed['summary'] ?? '',
-                'lyrics_url' => $parsed['lyrics_url'] ?? ''
+                'lyrics_url' => $parsed['lyrics_url'] ?? '',
+                'image_url' => $parsed['image_url'] ?? ''
             ];
         }
     }
@@ -658,6 +665,17 @@ function updateMp3Metadata($filepath, $metadata, $sourceUrl = '') {
 
         .file-item:last-child {
             border-bottom: none;
+        }
+
+        .file-thumbnail {
+            width: 72px;
+            height: 72px;
+            margin-right: 12px;
+            border-radius: 6px;
+            object-fit: cover;
+            flex-shrink: 0;
+            background: #f0f0f0;
+            border: 1px solid #e1e8ed;
         }
 
         .file-info {
@@ -1084,6 +1102,12 @@ function updateMp3Metadata($filepath, $metadata, $sourceUrl = '') {
                     <?php else: ?>
                         <?php foreach ($availableFiles as $file): ?>
                             <div class="file-item">
+                                <?php if (!empty($file['image_url'])): ?>
+                                    <img src="<?php echo htmlspecialchars($file['image_url']); ?>"
+                                         alt="Album art"
+                                         class="file-thumbnail"
+                                         onerror="this.style.display='none'">
+                                <?php endif; ?>
                                 <div class="file-info">
                                     <?php if (!empty($file['video_title'])): ?>
                                         <div style="font-size: 11px; color: #999; margin-bottom: 3px;">

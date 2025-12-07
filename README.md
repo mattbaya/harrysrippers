@@ -22,6 +22,7 @@ The application uses OpenAI's GPT-4o-mini to automatically parse video titles an
    - **Album name** if mentioned (e.g., "Remastered 2009" or empty if not applicable)
    - **Song summary** - A brief 1-2 sentence description of the song (genre, mood, historical significance)
    - **Lyrics link** - Direct URL to lyrics on sites like Genius or AZLyrics (if available)
+   - **Album/Artist image** - URL to album cover or artist photo from Wikipedia/Wikimedia Commons (if available)
 3. ChatGPT returns structured JSON data with the parsed information
 4. The application uses ffmpeg to embed metadata (artist/title/album/URL) into the MP3 file's ID3 tags
 5. Additional information (summary, lyrics link) is stored in the .meta file for display
@@ -37,11 +38,12 @@ The application uses OpenAI's GPT-4o-mini to automatically parse video titles an
 
 #### Display & Organization
 - **Multi-Level Display**: Each file shows comprehensive information:
-  1. **Original YouTube Title**: The raw title from the video (in small gray text)
-  2. **Parsed Metadata**: Clean display as "**Artist** - Title (Album)"
-  3. **Filename**: The actual file stored on disk
-  4. **AI-Generated Summary**: Brief description of the song in italics (genre, mood, significance)
-  5. **Lyrics Link**: Clickable link to lyrics on reputable sites (when available)
+  1. **Album/Artist Thumbnail**: 1-inch square image of album art or artist photo (left side)
+  2. **Original YouTube Title**: The raw title from the video (in small gray text)
+  3. **Parsed Metadata**: Clean display as "**Artist** - Title (Album)"
+  4. **Filename**: The actual file stored on disk
+  5. **AI-Generated Summary**: Brief description of the song in italics (genre, mood, significance)
+  6. **Lyrics Link**: Clickable link to lyrics on reputable sites (when available)
 - **Timestamp Tracking**: Shows when each file was downloaded with smart formatting:
   - "Just now" for files downloaded < 1 minute ago
   - "5 mins ago" for recent downloads
