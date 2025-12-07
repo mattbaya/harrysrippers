@@ -503,7 +503,11 @@ function parseVideoTitle($videoTitle, $apiKey, $description = '') {
 - 'title': Song title
 - 'album': Album name (empty string if not mentioned)
 - 'summary': A brief 1-2 sentence description of the song (genre, mood, significance, etc.)
-- 'lyrics_url': A direct link to lyrics on a reputable site like genius.com or azlyrics.com (empty string if you're not certain of the exact URL)
+- 'lyrics_url': A direct URL to lyrics. Be thorough - construct the URL using the standard format for popular lyrics sites:
+  * Genius: https://genius.com/[Artist]-[song-title]-lyrics (use hyphens, lowercase, remove special chars)
+  * AZLyrics: https://www.azlyrics.com/lyrics/[artist]/[songtitle].html (remove spaces/special chars, lowercase)
+  * Try to provide a URL for any recognizable song, even if you're constructing it from the artist/title format
+  * Only leave empty if it's clearly not a real song (instrumentals, sound effects, etc.)
 
 Video title: " . $videoTitle;
 
