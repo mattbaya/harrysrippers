@@ -47,6 +47,31 @@ function savePlaylists($playlists) {
     file_put_contents($playlistsFile, json_encode($playlists, JSON_PRETTY_PRINT));
 }
 
+// Read ID3 tags from audio file using ffprobe
+function getID3Tags($filePath) {
+    $ffprobePath = '/home/harry/bin/ffprobe';
+    $cmd = escapeshellarg($ffprobePath) . ' -v quiet -print_format json -show_format ' . escapeshellarg($filePath) . ' 2>/dev/null';
+
+    $output = shell_exec($cmd);
+    $data = json_decode($output, true);
+
+    $tags = $data['format']['tags'] ?? [];
+
+    // Normalize tag keys (ID3 tags can be uppercase or lowercase)
+    $normalized = [];
+    foreach ($tags as $key => $value) {
+        $normalized[strtolower($key)] = $value;
+    }
+
+    return [
+        'artist' => $normalized['artist'] ?? $normalized['album_artist'] ?? '',
+        'title' => $normalized['title'] ?? '',
+        'album' => $normalized['album'] ?? '',
+        'genre' => $normalized['genre'] ?? '',
+        'year' => $normalized['date'] ?? $normalized['year'] ?? ''
+    ];
+}
+
 // Get available MP3 files
 function getAvailableFiles() {
     global $downloadsDir, $downloadsUrl;
@@ -58,9 +83,36 @@ function getAvailableFiles() {
         if (strpos($basename, '_backup') !== false) continue;
         if (strpos($basename, '_waveform') !== false) continue;
 
-        // Read metadata if available
+        // Read metadata from .meta file if available
         $metaPath = $file . '.meta';
         $meta = file_exists($metaPath) ? json_decode(file_get_contents($metaPath), true) : [];
+
+        // If no artist/title in meta, read ID3 tags from file
+        if (empty($meta['artist']) || empty($meta['title'])) {
+            $id3 = getID3Tags($file);
+            if (empty($meta['artist']) && !empty($id3['artist'])) {
+                $meta['artist'] = $id3['artist'];
+            }
+            if (empty($meta['title']) && !empty($id3['title'])) {
+                $meta['title'] = $id3['title'];
+            }
+            if (empty($meta['album']) && !empty($id3['album'])) {
+                $meta['album'] = $id3['album'];
+            }
+        }
+
+        // Fallback: parse filename if still no title
+        if (empty($meta['title'])) {
+            $name = pathinfo($basename, PATHINFO_FILENAME);
+            // Try to split "Artist - Title" format
+            if (strpos($name, ' - ') !== false) {
+                list($fileArtist, $fileTitle) = explode(' - ', $name, 2);
+                if (empty($meta['artist'])) $meta['artist'] = trim($fileArtist);
+                $meta['title'] = trim($fileTitle);
+            } else {
+                $meta['title'] = $name;
+            }
+        }
 
         // Get duration
         $duration = getAudioDuration($file);
@@ -70,6 +122,7 @@ function getAvailableFiles() {
             'url' => $downloadsUrl . '/' . rawurlencode($basename),
             'artist' => $meta['artist'] ?? '',
             'title' => $meta['title'] ?? '',
+            'album' => $meta['album'] ?? '',
             'size' => filesize($file),
             'modified' => filemtime($file),
             'duration' => $duration,
