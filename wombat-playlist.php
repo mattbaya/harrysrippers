@@ -456,16 +456,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
             $indexData = json_decode(file_get_contents($indexFile), true);
             $results = [];
-            $count = 0;
+            $seen = []; // For deduplication
 
             foreach ($indexData['files'] ?? [] as $entry) {
-                $searchText = strtolower(($entry['artist'] ?? '') . ' ' . ($entry['title'] ?? '') . ' ' . ($entry['path'] ?? ''));
+                // Case-insensitive search in artist, title, album, and path
+                $searchText = strtolower(($entry['artist'] ?? '') . ' ' . ($entry['title'] ?? '') . ' ' . ($entry['album'] ?? '') . ' ' . ($entry['path'] ?? ''));
                 if (strpos($searchText, $query) !== false) {
-                    $results[] = $entry;
-                    $count++;
-                    if ($count >= 20) break; // Limit results
+                    // Deduplicate by artist+title combo
+                    $dedupKey = strtolower(($entry['artist'] ?? '') . '|' . ($entry['title'] ?? ''));
+                    if (!isset($seen[$dedupKey])) {
+                        $seen[$dedupKey] = true;
+                        $results[] = $entry;
+                    }
                 }
             }
+
+            // Sort by artist (case-insensitive), then by title
+            usort($results, function($a, $b) {
+                $artistCmp = strcasecmp($a['artist'] ?? '', $b['artist'] ?? '');
+                if ($artistCmp !== 0) return $artistCmp;
+                return strcasecmp($a['title'] ?? '', $b['title'] ?? '');
+            });
+
+            // Limit to 50 results max
+            $results = array_slice($results, 0, 50);
 
             echo json_encode(['success' => true, 'results' => $results]);
             exit;
@@ -536,15 +550,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
             // Use yt-dlp to search YouTube
             $ytdlpPath = '/home/harry/bin/yt-dlp';
-            $searchCmd = escapeshellcmd($ytdlpPath) . ' "ytsearch10:' . escapeshellarg($query) . '" --flat-playlist --dump-json 2>/dev/null';
+            $searchTerm = 'ytsearch10:' . $query;
+            $searchCmd = escapeshellarg($ytdlpPath) . ' ' . escapeshellarg($searchTerm) . ' --flat-playlist --dump-json 2>&1';
 
             $output = [];
             exec($searchCmd, $output, $returnCode);
 
             $results = [];
+            $seen = []; // For deduplication
             foreach ($output as $line) {
                 $data = json_decode($line, true);
-                if ($data && isset($data['url'])) {
+                if ($data && isset($data['id'])) {
+                    // Deduplicate by video ID
+                    if (isset($seen[$data['id']])) continue;
+                    $seen[$data['id']] = true;
+
                     $duration = '';
                     if (isset($data['duration'])) {
                         $mins = floor($data['duration'] / 60);
@@ -562,6 +582,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     if (count($results) >= 10) break;
                 }
             }
+
+            // Sort by channel name (like sorting by artist)
+            usort($results, function($a, $b) {
+                return strcasecmp($a['channel'] ?? '', $b['channel'] ?? '');
+            });
 
             echo json_encode(['success' => true, 'results' => $results]);
             exit;
