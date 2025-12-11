@@ -551,6 +551,9 @@ if ($files) {
             $backupPath = $downloadsDir . '/backups/' . pathinfo($basename, PATHINFO_FILENAME) . '_backup.mp3';
             $hasBackup = file_exists($backupPath);
 
+            // Check if this track exists in Matt's Archive
+            $archiveMatch = searchArchive($artist, $title);
+
             $availableFiles[] = [
                 'name' => $basename,
                 'size' => filesize($file),
@@ -569,7 +572,8 @@ if ($files) {
                 'waveform_url' => $waveformUrl,
                 'peak_level' => $peakLevel,
                 'needs_normalize' => needsNormalization($peakLevel),
-                'has_backup' => $hasBackup
+                'has_backup' => $hasBackup,
+                'archive_match' => $archiveMatch
             ];
         }
     }
@@ -976,6 +980,67 @@ function updateMp3Metadata($filepath, $metadata, $sourceUrl = '') {
 
     return false;
 }
+
+// Function to search Matt's Archive for a matching track
+function searchArchive($artist, $title) {
+    $indexFile = __DIR__ . '/archive_index.json';
+
+    if (!file_exists($indexFile)) {
+        return null;
+    }
+
+    static $archiveIndex = null;
+
+    // Load index once per request
+    if ($archiveIndex === null) {
+        $data = json_decode(file_get_contents($indexFile), true);
+        $archiveIndex = $data['files'] ?? [];
+    }
+
+    if (empty($archiveIndex) || empty($artist) || empty($title)) {
+        return null;
+    }
+
+    // Create search key from artist and title
+    $searchKey = strtolower($artist . ' ' . $title);
+    $searchKey = preg_replace('/[^a-z0-9\s]/', '', $searchKey);
+    $searchKey = preg_replace('/\s+/', ' ', trim($searchKey));
+
+    // Also create variations for matching
+    $titleOnly = strtolower($title);
+    $titleOnly = preg_replace('/[^a-z0-9\s]/', '', $titleOnly);
+    $titleOnly = preg_replace('/\s+/', ' ', trim($titleOnly));
+
+    $artistOnly = strtolower($artist);
+    $artistOnly = preg_replace('/[^a-z0-9\s]/', '', $artistOnly);
+    $artistOnly = preg_replace('/\s+/', ' ', trim($artistOnly));
+
+    foreach ($archiveIndex as $entry) {
+        $entryKey = $entry['search_key'] ?? '';
+        $entryArtist = strtolower($entry['artist'] ?? '');
+        $entryTitle = strtolower($entry['title'] ?? '');
+
+        // Exact match on search key
+        if ($searchKey === trim($entryKey)) {
+            return $entry;
+        }
+
+        // Match on artist and title separately
+        if (!empty($entryArtist) && !empty($entryTitle)) {
+            $entryArtistClean = preg_replace('/[^a-z0-9\s]/', '', $entryArtist);
+            $entryTitleClean = preg_replace('/[^a-z0-9\s]/', '', $entryTitle);
+
+            // Check if artist and title both match
+            if (strpos($entryArtistClean, $artistOnly) !== false || strpos($artistOnly, $entryArtistClean) !== false) {
+                if (strpos($entryTitleClean, $titleOnly) !== false || strpos($titleOnly, $entryTitleClean) !== false) {
+                    return $entry;
+                }
+            }
+        }
+    }
+
+    return null;
+}
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -1179,6 +1244,23 @@ function updateMp3Metadata($filepath, $metadata, $sourceUrl = '') {
             font-style: italic;
             line-height: 1.4;
             text-align: left;
+        }
+
+        .archive-notice {
+            margin-top: 5px;
+            padding: 4px 8px;
+            background: linear-gradient(135deg, #d4edda 0%, #c3e6cb 100%);
+            border: 1px solid #28a745;
+            border-radius: 4px;
+            font-size: 11px;
+            color: #155724;
+            font-weight: 500;
+        }
+
+        .archive-album {
+            color: #666;
+            font-weight: normal;
+            font-style: italic;
         }
 
         .file-thumbnail {
@@ -1926,6 +2008,14 @@ function updateMp3Metadata($filepath, $metadata, $sourceUrl = '') {
                                             <?php endif; ?>
                                             <?php if (!empty($file['summary'])): ?>
                                                 <div class="file-summary"><?php echo htmlspecialchars($file['summary']); ?></div>
+                                            <?php endif; ?>
+                                            <?php if (!empty($file['archive_match'])): ?>
+                                                <div class="archive-notice">
+                                                    📀 Download an MP3 of this from Matt's Archive
+                                                    <?php if (!empty($file['archive_match']['album'])): ?>
+                                                        <span class="archive-album">(<?php echo htmlspecialchars($file['archive_match']['album']); ?>)</span>
+                                                    <?php endif; ?>
+                                                </div>
                                             <?php endif; ?>
                                         </div>
                                     </div><!-- End file-content-row -->
