@@ -454,26 +454,33 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 exit;
             }
 
+            // Normalize function - strips special chars for flexible matching
+            $normalize = function($str) {
+                // Remove apostrophes/quotes completely (don't replace with space)
+                $str = preg_replace('/[\'\"]+/', '', $str);
+                // Replace other special chars with spaces
+                $str = preg_replace('/[_\-\.\/\\\\&\(\)\[\]\{\},;:!?]+/', ' ', $str);
+                // Collapse multiple spaces
+                $str = preg_replace('/\s+/', ' ', $str);
+                return strtolower(trim($str));
+            };
+
+            $queryNormalized = $normalize($query);
+
             $indexData = json_decode(file_get_contents($indexFile), true);
             $results = [];
             $seen = []; // For deduplication
 
             foreach ($indexData['files'] ?? [] as $entry) {
-                // Build comprehensive search text including path with normalized separators
-                $path = $entry['path'] ?? '';
-                // Convert path separators to spaces for better matching (artist/album/file -> artist album file)
-                $pathNormalized = str_replace(['/', '\\', '_', '-'], ' ', $path);
-
-                // Case-insensitive search in artist, title, album, and normalized path
-                $searchText = strtolower(
+                // Build comprehensive search text from all fields
+                $searchText = $normalize(
                     ($entry['artist'] ?? '') . ' ' .
                     ($entry['title'] ?? '') . ' ' .
                     ($entry['album'] ?? '') . ' ' .
-                    $path . ' ' .
-                    $pathNormalized
+                    ($entry['path'] ?? '')
                 );
 
-                if (strpos($searchText, $query) !== false) {
+                if (strpos($searchText, $queryNormalized) !== false) {
                     // Deduplicate by artist+title combo
                     $dedupKey = strtolower(($entry['artist'] ?? '') . '|' . ($entry['title'] ?? ''));
                     if (!isset($seen[$dedupKey])) {
