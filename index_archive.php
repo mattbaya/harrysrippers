@@ -9,7 +9,7 @@
  */
 
 $rclonePath = '/usr/bin/rclone';
-$remotePath = 'matts-mp3s:/Music/Music';
+$remotePath = 'matts-mp3s:Music';
 $indexFile = __DIR__ . '/archive_index.json';
 
 echo "Starting archive index at " . date('Y-m-d H:i:s') . "\n";

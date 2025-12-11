@@ -224,9 +224,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
             // Copy to rclone remote and add to index
             $rcloneResult = null;
-            $rclonePath = 'matts-mp3s:/Music/Music/Uploads/' . $outputFilename;
+            $rclonePath = 'matts-mp3s:Music/Uploads/' . $outputFilename;
             $rcloneCmd = 'rclone copy ' . escapeshellarg($outputPath) . ' ' .
-                        escapeshellarg('matts-mp3s:/Music/Music/Uploads/') . ' 2>&1';
+                        escapeshellarg('matts-mp3s:Music/Uploads/') . ' 2>&1';
             exec($rcloneCmd, $rcloneOutput, $rcloneReturnCode);
 
             if ($rcloneReturnCode === 0) {
@@ -524,7 +524,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             }
 
             // Download from rclone
-            $rcloneCmd = 'rclone copy ' . escapeshellarg('matts-mp3s:/Music/Music/' . $path) . ' ' .
+            $rcloneCmd = 'rclone copy ' . escapeshellarg('matts-mp3s:Music/' . $path) . ' ' .
                         escapeshellarg($downloadsDir) . ' 2>&1';
             exec($rcloneCmd, $rcloneOutput, $rcloneReturnCode);
 
