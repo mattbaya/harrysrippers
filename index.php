@@ -330,12 +330,15 @@ if (isset($_POST['normalize_audio']) && !empty($_POST['filename'])) {
         $metaData = file_exists($metaPath) ? json_decode(file_get_contents($metaPath), true) : [];
 
         // Use ffmpeg with:
-        // 1. silenceremove to trim silence from start and end (threshold -50dB, minimum 0.5s)
+        // 1. silenceremove to trim silence from start and end
+        //    - Only removes silence longer than 1 second (start_silence=1.0)
+        //    - Leaves 1 second buffer by using stop_silence=1.0
+        //    - Uses -50dB threshold for silence detection
         // 2. volume filter for peak normalization (bring loudest part to -1dB)
         // 3. limiter to prevent clipping
         // 4. map_metadata to preserve existing tags
         $ffmpegCommand = sprintf(
-            '%s -i %s -af "silenceremove=start_periods=1:start_silence=0.5:start_threshold=-50dB:detection=peak,areverse,silenceremove=start_periods=1:start_silence=0.5:start_threshold=-50dB:detection=peak,areverse,volume=%sdB,alimiter=limit=0.95:attack=5:release=50" -map_metadata 0 -ar 44100 -ab 192k %s 2>&1',
+            '%s -i %s -af "silenceremove=start_periods=1:start_silence=1.0:start_threshold=-50dB:stop_silence=1.0:detection=peak,areverse,silenceremove=start_periods=1:start_silence=1.0:start_threshold=-50dB:stop_silence=1.0:detection=peak,areverse,volume=%sdB,alimiter=limit=0.95:attack=5:release=50" -map_metadata 0 -ar 44100 -ab 192k %s 2>&1',
             escapeshellarg($ffmpegPath),
             escapeshellarg($filePath),
             $gainNeeded,

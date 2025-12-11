@@ -121,16 +121,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             }
 
             $tempWebm = $_FILES['audio']['tmp_name'];
+            $tempMp3 = sys_get_temp_dir() . '/voice_' . uniqid() . '.mp3';
 
-            // Convert webm to mp3 using ffmpeg
+            // Convert webm to mp3 first
             $cmd = escapeshellcmd($ffmpegPath) . ' -i ' . escapeshellarg($tempWebm) .
                    ' -vn -ar 44100 -ac 1 -b:a 128k ' .
-                   escapeshellarg($outputPath) . ' 2>&1';
-
+                   escapeshellarg($tempMp3) . ' 2>&1';
             exec($cmd, $output, $returnCode);
 
-            if ($returnCode !== 0 || !file_exists($outputPath)) {
-                echo json_encode(['success' => false, 'error' => 'Conversion failed: ' . implode("\n", $output)]);
+            if ($returnCode !== 0 || !file_exists($tempMp3)) {
+                echo json_encode(['success' => false, 'error' => 'Conversion failed']);
+                exit;
+            }
+
+            // Normalize the voice recording using loudnorm
+            $normCmd = escapeshellcmd($ffmpegPath) . ' -i ' . escapeshellarg($tempMp3) .
+                       ' -af loudnorm=I=-16:TP=-1.5:LRA=11 -ar 44100 -ac 1 -b:a 128k ' .
+                       escapeshellarg($outputPath) . ' 2>&1';
+            exec($normCmd, $normOutput, $normReturnCode);
+
+            @unlink($tempMp3);
+
+            if ($normReturnCode !== 0 || !file_exists($outputPath)) {
+                echo json_encode(['success' => false, 'error' => 'Normalization failed']);
                 exit;
             }
 
@@ -146,6 +159,147 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
             echo json_encode(['success' => true, 'filename' => $outputFilename]);
             exit;
+
+        case 'upload_track':
+            if (!isset($_FILES['audio']) || $_FILES['audio']['error'] !== UPLOAD_ERR_OK) {
+                echo json_encode(['success' => false, 'error' => 'No file received']);
+                exit;
+            }
+
+            $originalName = $_FILES['audio']['name'];
+            $ext = strtolower(pathinfo($originalName, PATHINFO_EXTENSION));
+            $allowedExts = ['mp3', 'm4a', 'wav', 'ogg', 'webm'];
+
+            if (!in_array($ext, $allowedExts)) {
+                echo json_encode(['success' => false, 'error' => 'Invalid file type']);
+                exit;
+            }
+
+            // Clean filename
+            $baseName = pathinfo($originalName, PATHINFO_FILENAME);
+            $safeName = preg_replace('/[^a-zA-Z0-9_\-\s]/', '', $baseName);
+            $safeName = trim($safeName) ?: 'Upload_' . time();
+
+            $outputFilename = $safeName . '.mp3';
+            $outputPath = $downloadsDir . '/' . $outputFilename;
+
+            // Ensure unique filename
+            $counter = 1;
+            while (file_exists($outputPath)) {
+                $outputFilename = $safeName . '_' . $counter . '.mp3';
+                $outputPath = $downloadsDir . '/' . $outputFilename;
+                $counter++;
+            }
+
+            $tempFile = $_FILES['audio']['tmp_name'];
+
+            // Convert to mp3 if not already (also normalizes format)
+            $cmd = escapeshellcmd($ffmpegPath) . ' -i ' . escapeshellarg($tempFile) .
+                   ' -vn -ar 44100 -ac 2 -b:a 192k ' .
+                   escapeshellarg($outputPath) . ' 2>&1';
+            exec($cmd, $output, $returnCode);
+
+            if ($returnCode !== 0 || !file_exists($outputPath)) {
+                echo json_encode(['success' => false, 'error' => 'Conversion failed']);
+                exit;
+            }
+
+            // Try to extract title from filename (Artist - Title format)
+            $artist = '';
+            $title = $safeName;
+            if (strpos($safeName, ' - ') !== false) {
+                list($artist, $title) = explode(' - ', $safeName, 2);
+            }
+
+            // Create meta file
+            $meta = [
+                'artist' => trim($artist),
+                'title' => trim($title),
+                'album' => '',
+                'summary' => 'Uploaded track',
+                'uploaded' => date('Y-m-d H:i:s'),
+                'original_filename' => $originalName
+            ];
+            file_put_contents($outputPath . '.meta', json_encode($meta, JSON_PRETTY_PRINT));
+
+            // Copy to rclone remote and add to index
+            $rcloneResult = null;
+            $rclonePath = 'matts-mp3s:/Music/Music/Uploads/' . $outputFilename;
+            $rcloneCmd = 'rclone copy ' . escapeshellarg($outputPath) . ' ' .
+                        escapeshellarg('matts-mp3s:/Music/Music/Uploads/') . ' 2>&1';
+            exec($rcloneCmd, $rcloneOutput, $rcloneReturnCode);
+
+            if ($rcloneReturnCode === 0) {
+                // Add to archive index
+                $indexFile = __DIR__ . '/archive_index.json';
+                if (file_exists($indexFile)) {
+                    $indexData = json_decode(file_get_contents($indexFile), true);
+                    $indexData['files'][] = [
+                        'path' => 'Uploads/' . $outputFilename,
+                        'artist' => $meta['artist'],
+                        'title' => $meta['title'],
+                        'album' => '',
+                        'search_key' => strtolower($meta['artist'] . ' ' . $meta['title'])
+                    ];
+                    $indexData['count'] = count($indexData['files']);
+                    file_put_contents($indexFile, json_encode($indexData, JSON_PRETTY_PRINT));
+                }
+                $rcloneResult = 'Copied to Matt\'s Archive';
+            }
+
+            echo json_encode([
+                'success' => true,
+                'filename' => $outputFilename,
+                'rclone' => $rcloneResult
+            ]);
+            exit;
+
+        case 'check_silence':
+            // Check playlist tracks for silence periods > 5 seconds
+            $playlistId = $_POST['playlist_id'] ?? '';
+            if (!isset($playlists[$playlistId])) {
+                echo json_encode(['success' => false, 'error' => 'Playlist not found']);
+                exit;
+            }
+
+            $playlist = $playlists[$playlistId];
+            $silenceWarnings = [];
+
+            foreach ($playlist['tracks'] as $index => $track) {
+                $filePath = $downloadsDir . '/' . $track['filename'];
+                if (!file_exists($filePath)) continue;
+
+                // Use ffmpeg silencedetect to find silence periods
+                $detectCmd = escapeshellcmd($ffmpegPath) . ' -i ' . escapeshellarg($filePath) .
+                            ' -af silencedetect=noise=-50dB:d=5 -f null - 2>&1';
+                $detectOutput = shell_exec($detectCmd);
+
+                // Parse silence_start and silence_end from output
+                preg_match_all('/silence_start: ([\d.]+)/', $detectOutput, $starts);
+                preg_match_all('/silence_duration: ([\d.]+)/', $detectOutput, $durations);
+
+                if (!empty($starts[1])) {
+                    foreach ($starts[1] as $i => $start) {
+                        $duration = floatval($durations[1][$i] ?? 0);
+                        if ($duration >= 5) {
+                            $silenceWarnings[] = [
+                                'track' => $index + 1,
+                                'filename' => $track['filename'],
+                                'start' => floatval($start),
+                                'duration' => $duration
+                            ];
+                        }
+                    }
+                }
+            }
+
+            echo json_encode([
+                'success' => true,
+                'has_silence' => !empty($silenceWarnings),
+                'warnings' => $silenceWarnings
+            ]);
+            exit;
+
         case 'create_playlist':
             $name = trim($_POST['name'] ?? '');
             if (empty($name)) {
@@ -250,6 +404,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
         case 'merge_playlist':
             $playlistId = $_POST['playlist_id'] ?? '';
+            $trimSilence = ($_POST['trim_silence'] ?? '') === '1';
+
             if (!isset($playlists[$playlistId])) {
                 echo json_encode(['success' => false, 'error' => 'Playlist not found']);
                 exit;
@@ -319,21 +475,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $loudnormStats = json_decode($matches[0], true);
             }
 
-            // Apply normalization
+            // Build audio filter chain
+            $silenceFilter = $trimSilence ? 'silenceremove=stop_periods=-1:stop_duration=5:stop_threshold=-50dB,' : '';
+
+            // Apply normalization (and optionally remove silence > 5 seconds)
             if ($loudnormStats) {
                 // Two-pass normalization with measured values
                 $normCmd = escapeshellcmd($ffmpegPath) . ' -i ' . escapeshellarg($tempConcat) .
-                           ' -af loudnorm=I=-16:TP=-1.5:LRA=11:' .
+                           ' -af "' . $silenceFilter . 'loudnorm=I=-16:TP=-1.5:LRA=11:' .
                            'measured_I=' . ($loudnormStats['input_i'] ?? '-24') . ':' .
                            'measured_TP=' . ($loudnormStats['input_tp'] ?? '-2') . ':' .
                            'measured_LRA=' . ($loudnormStats['input_lra'] ?? '7') . ':' .
                            'measured_thresh=' . ($loudnormStats['input_thresh'] ?? '-34') . ':' .
-                           'offset=' . ($loudnormStats['target_offset'] ?? '0') . ':linear=true ' .
+                           'offset=' . ($loudnormStats['target_offset'] ?? '0') . ':linear=true" ' .
                            '-ar 44100 -b:a 192k ' . escapeshellarg($outputPath) . ' 2>&1';
             } else {
                 // Single-pass normalization as fallback
                 $normCmd = escapeshellcmd($ffmpegPath) . ' -i ' . escapeshellarg($tempConcat) .
-                           ' -af loudnorm=I=-16:TP=-1.5:LRA=11 -ar 44100 -b:a 192k ' .
+                           ' -af "' . $silenceFilter . 'loudnorm=I=-16:TP=-1.5:LRA=11" -ar 44100 -b:a 192k ' .
                            escapeshellarg($outputPath) . ' 2>&1';
             }
 
@@ -845,7 +1004,6 @@ $availableFiles = getAvailableFiles();
             <nav class="nav-tabs">
                 <a href="index.php">MP3 Converter</a>
                 <a href="wombat-playlist.php" class="active">Playlists</a>
-                <a href="#" onclick="toggleRecorder(); return false;">Record Intro</a>
             </nav>
         </header>
 
@@ -893,15 +1051,79 @@ $availableFiles = getAvailableFiles();
 
             <!-- Available Files -->
             <div class="panel">
-                <h2>Available MP3s</h2>
+                <h2>Track Library</h2>
+
+                <!-- Record Voice Section -->
+                <div class="section-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                    <span style="font-size: 13px; color: #667eea; font-weight: 500;">🎤 Record Voice</span>
+                </div>
+                <div id="inlineRecorder" style="background: rgba(102, 126, 234, 0.1); border-radius: 10px; padding: 15px; margin-bottom: 15px;">
+                    <input type="text" id="recordingName" placeholder="Recording name..." style="width: 100%; padding: 8px; margin-bottom: 10px; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); border-radius: 5px; color: #fff; font-size: 13px;">
+                    <div style="display: flex; gap: 10px; align-items: center;">
+                        <button id="recordBtn" class="btn btn-primary btn-small" onclick="toggleRecording()" style="flex-shrink: 0;">
+                            🎤 Record
+                        </button>
+                        <div id="recordingTimer" style="color: #667eea; font-weight: bold; display: none;">0:00</div>
+                        <canvas id="waveformCanvas" style="flex: 1; height: 30px; display: none; background: rgba(0,0,0,0.2); border-radius: 4px;"></canvas>
+                    </div>
+                    <div id="recordingControls" style="margin-top: 10px; display: none;">
+                        <audio id="recordingPreview" controls style="width: 100%; height: 32px; margin-bottom: 8px;"></audio>
+                        <div style="display: flex; gap: 8px;">
+                            <button class="btn btn-small btn-outline" onclick="discardRecording()">Discard</button>
+                            <button class="btn btn-small btn-success" onclick="saveRecording()">Save</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Upload Section -->
+                <div class="section-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                    <span style="font-size: 13px; color: #28a745; font-weight: 500;">📁 Upload Track</span>
+                </div>
+                <div style="margin-bottom: 15px;">
+                    <input type="file" id="uploadFile" accept=".mp3,.m4a,.wav,.ogg,.webm" style="display: none;" onchange="uploadTrack()">
+                    <button class="btn btn-small btn-outline" onclick="document.getElementById('uploadFile').click()" style="width: 100%;">
+                        Choose File to Upload
+                    </button>
+                    <div id="uploadProgress" style="display: none; margin-top: 8px; font-size: 12px; color: #888;"></div>
+                </div>
+
+                <?php
+                // Separate voice recordings from music tracks
+                $voiceTracks = array_filter($availableFiles, fn($f) => ($f['artist'] ?? '') === 'Voice Recording');
+                $musicTracks = array_filter($availableFiles, fn($f) => ($f['artist'] ?? '') !== 'Voice Recording');
+                ?>
+
+                <!-- Voice Recordings Section -->
+                <?php if (!empty($voiceTracks)): ?>
+                <div class="section-header" style="margin-bottom: 10px; padding-top: 10px; border-top: 1px solid rgba(255,255,255,0.1);">
+                    <span style="font-size: 13px; color: #ffc107; font-weight: 500;">🎙️ Voice Recordings</span>
+                </div>
+                <div class="available-files" style="max-height: 150px; margin-bottom: 15px;">
+                    <?php foreach ($voiceTracks as $file): ?>
+                        <div class="available-file" data-filename="<?= htmlspecialchars($file['name']) ?>">
+                            <div class="file-info">
+                                <div class="file-name"><?= htmlspecialchars($file['title'] ?: $file['name']) ?></div>
+                                <div class="file-meta">
+                                    <span style="color: #ffc107;"><?= $file['duration_formatted'] ?></span>
+                                </div>
+                            </div>
+                            <button class="btn btn-small btn-success add-to-playlist" onclick="addToPlaylist('<?= htmlspecialchars($file['name'], ENT_QUOTES) ?>')">+ Add</button>
+                        </div>
+                    <?php endforeach; ?>
+                </div>
+                <?php endif; ?>
+
+                <!-- Music Tracks Section -->
+                <div class="section-header" style="margin-bottom: 10px; <?= !empty($voiceTracks) ? '' : 'padding-top: 10px; border-top: 1px solid rgba(255,255,255,0.1);' ?>">
+                    <span style="font-size: 13px; color: #17a2b8; font-weight: 500;">🎵 Music Tracks</span>
+                </div>
                 <div class="available-files" id="availableFiles">
-                    <?php if (empty($availableFiles)): ?>
-                        <div class="empty-state">
-                            <div class="icon">🎵</div>
-                            <p>No MP3 files available</p>
+                    <?php if (empty($musicTracks)): ?>
+                        <div class="empty-state" style="padding: 20px;">
+                            <p style="color: #666; font-size: 13px;">No music files available</p>
                         </div>
                     <?php else: ?>
-                        <?php foreach ($availableFiles as $file): ?>
+                        <?php foreach ($musicTracks as $file): ?>
                             <div class="available-file" data-filename="<?= htmlspecialchars($file['name']) ?>">
                                 <div class="file-info">
                                     <div class="file-name">
@@ -954,46 +1176,6 @@ $availableFiles = getAvailableFiles();
             <div class="modal-actions">
                 <button class="btn btn-outline" onclick="hideCreateModal()">Cancel</button>
                 <button class="btn btn-primary" onclick="createPlaylist()">Create</button>
-            </div>
-        </div>
-    </div>
-
-    <!-- Recorder Modal -->
-    <div class="modal" id="recorderModal">
-        <div class="modal-content" style="width: 500px;">
-            <h3>🎙️ Record Song Introduction</h3>
-            <p style="color: #888; margin-bottom: 20px; font-size: 14px;">Record a voice introduction for your playlist tracks</p>
-
-            <input type="text" id="recordingName" placeholder="Recording name (e.g., 'Intro - My Favorite Song')" required>
-
-            <div id="recorderUI" style="text-align: center; padding: 20px;">
-                <div id="recordingStatus" style="margin-bottom: 15px; font-size: 14px; color: #888;">
-                    Click the button to start recording
-                </div>
-
-                <div id="recordingTimer" style="font-size: 36px; font-weight: bold; margin-bottom: 20px; color: #667eea; display: none;">
-                    0:00
-                </div>
-
-                <div id="recordingWaveform" style="height: 60px; background: rgba(255,255,255,0.05); border-radius: 8px; margin-bottom: 20px; display: none; overflow: hidden;">
-                    <canvas id="waveformCanvas" style="width: 100%; height: 100%;"></canvas>
-                </div>
-
-                <button id="recordBtn" class="btn btn-primary" style="width: 80px; height: 80px; border-radius: 50%; font-size: 24px;" onclick="toggleRecording()">
-                    🎤
-                </button>
-
-                <div id="recordingControls" style="margin-top: 20px; display: none;">
-                    <audio id="recordingPreview" controls style="width: 100%; margin-bottom: 15px;"></audio>
-                    <div style="display: flex; gap: 10px; justify-content: center;">
-                        <button class="btn btn-outline" onclick="discardRecording()">Discard</button>
-                        <button class="btn btn-success" onclick="saveRecording()">Save to Library</button>
-                    </div>
-                </div>
-            </div>
-
-            <div class="modal-actions" style="margin-top: 20px;">
-                <button class="btn btn-outline" onclick="hideRecorderModal()">Close</button>
             </div>
         </div>
     </div>
@@ -1205,19 +1387,49 @@ $availableFiles = getAvailableFiles();
             const btn = document.getElementById('mergeBtn');
             const originalText = btn.innerHTML;
             btn.disabled = true;
-            btn.innerHTML = '⏳ Creating...';
+            btn.innerHTML = '⏳ Checking...';
 
             try {
+                // First, check for long silence periods
+                const checkResponse = await fetch('wombat-playlist.php', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+                    body: 'action=check_silence&playlist_id=' + encodeURIComponent(currentPlaylistId)
+                });
+
+                const checkData = await checkResponse.json();
+                let trimSilence = false;
+
+                if (checkData.success && checkData.has_silence) {
+                    // Build warning message
+                    let warning = 'Silence detected (> 5 seconds) in the following tracks:\n\n';
+                    checkData.warnings.forEach(w => {
+                        warning += `• Track ${w.track}: ${Math.round(w.duration)}s silence at ${Math.round(w.start)}s\n`;
+                    });
+                    warning += '\nWould you like to trim out these long silences?';
+
+                    trimSilence = confirm(warning);
+                }
+
+                // Now merge the playlist
+                btn.innerHTML = '⏳ Creating...';
+
                 const response = await fetch('wombat-playlist.php', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-                    body: 'action=merge_playlist&playlist_id=' + encodeURIComponent(currentPlaylistId)
+                    body: 'action=merge_playlist&playlist_id=' + encodeURIComponent(currentPlaylistId) +
+                          '&trim_silence=' + (trimSilence ? '1' : '0')
                 });
 
                 const data = await response.json();
 
                 if (data.success) {
-                    alert(`Created "${data.filename}"\n\n${data.track_count} tracks merged\nTotal duration: ${data.duration}\n\nThe file has been normalized for consistent volume.`);
+                    let msg = `Created "${data.filename}"\n\n${data.track_count} tracks merged\nTotal duration: ${data.duration}`;
+                    if (trimSilence) {
+                        msg += '\n\nLong silences have been trimmed.';
+                    }
+                    msg += '\n\nThe file has been normalized for consistent volume.';
+                    alert(msg);
                     location.reload(); // Refresh to show new file
                 } else {
                     alert('Error: ' + (data.error || 'Failed to merge playlist'));
@@ -1372,6 +1584,45 @@ $availableFiles = getAvailableFiles();
             }
         });
 
+        // ====== UPLOAD FUNCTIONALITY ======
+        async function uploadTrack() {
+            const fileInput = document.getElementById('uploadFile');
+            const file = fileInput.files[0];
+            if (!file) return;
+
+            const progress = document.getElementById('uploadProgress');
+            progress.style.display = 'block';
+            progress.textContent = 'Uploading and converting...';
+
+            const formData = new FormData();
+            formData.append('action', 'upload_track');
+            formData.append('audio', file);
+
+            try {
+                const response = await fetch('wombat-playlist.php', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    let msg = 'Uploaded: ' + data.filename;
+                    if (data.rclone) msg += '\n' + data.rclone;
+                    alert(msg);
+                    location.reload();
+                } else {
+                    alert('Error: ' + (data.error || 'Upload failed'));
+                }
+            } catch (err) {
+                console.error('Upload error:', err);
+                alert('Upload failed');
+            } finally {
+                progress.style.display = 'none';
+                fileInput.value = '';
+            }
+        }
+
         // ====== RECORDER FUNCTIONALITY ======
         let mediaRecorder = null;
         let audioChunks = [];
@@ -1382,28 +1633,14 @@ $availableFiles = getAvailableFiles();
         let audioContext = null;
         let analyser = null;
         let animationFrame = null;
-
-        function toggleRecorder() {
-            document.getElementById('recorderModal').classList.add('active');
-            document.getElementById('recordingName').focus();
-        }
-
-        function hideRecorderModal() {
-            document.getElementById('recorderModal').classList.remove('active');
-            if (isRecording) {
-                stopRecording();
-            }
-            resetRecorder();
-        }
+        let currentStream = null;
 
         function resetRecorder() {
             document.getElementById('recordingName').value = '';
-            document.getElementById('recordingStatus').textContent = 'Click the button to start recording';
             document.getElementById('recordingTimer').style.display = 'none';
-            document.getElementById('recordingWaveform').style.display = 'none';
+            document.getElementById('waveformCanvas').style.display = 'none';
             document.getElementById('recordingControls').style.display = 'none';
-            document.getElementById('recordBtn').textContent = '🎤';
-            document.getElementById('recordBtn').style.background = 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)';
+            document.getElementById('recordBtn').innerHTML = '🎤 Record';
             audioChunks = [];
             recordingBlob = null;
         }
@@ -1417,18 +1654,25 @@ $availableFiles = getAvailableFiles();
         }
 
         async function startRecording() {
+            const name = document.getElementById('recordingName').value.trim();
+            if (!name) {
+                alert('Please enter a name for the recording first');
+                document.getElementById('recordingName').focus();
+                return;
+            }
+
             try {
-                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                currentStream = await navigator.mediaDevices.getUserMedia({ audio: true });
 
                 // Set up audio context for visualization
                 audioContext = new (window.AudioContext || window.webkitAudioContext)();
                 analyser = audioContext.createAnalyser();
-                const source = audioContext.createMediaStreamSource(stream);
+                const source = audioContext.createMediaStreamSource(currentStream);
                 source.connect(analyser);
                 analyser.fftSize = 256;
 
                 // Set up media recorder
-                mediaRecorder = new MediaRecorder(stream);
+                mediaRecorder = new MediaRecorder(currentStream);
                 audioChunks = [];
 
                 mediaRecorder.ondataavailable = (e) => {
@@ -1440,10 +1684,6 @@ $availableFiles = getAvailableFiles();
                     const audioUrl = URL.createObjectURL(recordingBlob);
                     document.getElementById('recordingPreview').src = audioUrl;
                     document.getElementById('recordingControls').style.display = 'block';
-                    document.getElementById('recordingStatus').textContent = 'Recording complete! Preview and save.';
-
-                    // Stop all tracks
-                    stream.getTracks().forEach(track => track.stop());
                 };
 
                 mediaRecorder.start();
@@ -1451,11 +1691,9 @@ $availableFiles = getAvailableFiles();
                 recordingStartTime = Date.now();
 
                 // Update UI
-                document.getElementById('recordBtn').textContent = '⏹';
-                document.getElementById('recordBtn').style.background = '#dc3545';
-                document.getElementById('recordingStatus').textContent = 'Recording... Click to stop';
-                document.getElementById('recordingTimer').style.display = 'block';
-                document.getElementById('recordingWaveform').style.display = 'block';
+                document.getElementById('recordBtn').innerHTML = '⏹ Stop';
+                document.getElementById('recordingTimer').style.display = 'inline';
+                document.getElementById('waveformCanvas').style.display = 'block';
 
                 // Start timer
                 timerInterval = setInterval(updateTimer, 100);
@@ -1465,7 +1703,7 @@ $availableFiles = getAvailableFiles();
 
             } catch (err) {
                 console.error('Error accessing microphone:', err);
-                alert('Could not access microphone. Please ensure you have granted permission.');
+                alert('Could not access microphone. Please grant permission.');
             }
         }
 
@@ -1485,6 +1723,12 @@ $availableFiles = getAvailableFiles();
             if (animationFrame) {
                 cancelAnimationFrame(animationFrame);
                 animationFrame = null;
+            }
+
+            // Stop stream
+            if (currentStream) {
+                currentStream.getTracks().forEach(track => track.stop());
+                currentStream = null;
             }
 
             // Close audio context
@@ -1591,10 +1835,6 @@ $availableFiles = getAvailableFiles();
             }
         }
 
-        // Close recorder modal on backdrop click
-        document.getElementById('recorderModal').addEventListener('click', function(e) {
-            if (e.target === this) hideRecorderModal();
-        });
     </script>
 </body>
 </html>
