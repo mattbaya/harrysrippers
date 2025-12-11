@@ -187,10 +187,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 exit;
             }
 
-            // Normalize the voice recording using loudnorm
+            // Normalize the voice recording and add ID3 tags
+            $todayDate = date('Y-m-d');
             $normCmd = escapeshellcmd($ffmpegPath) . ' -i ' . escapeshellarg($tempMp3) .
                        ' -af loudnorm=I=-16:TP=-1.5:LRA=11 -ar 44100 -ac 1 -b:a 128k ' .
-                       escapeshellarg($outputPath) . ' 2>&1';
+                       ' -metadata artist=' . escapeshellarg('Voice Recording') .
+                       ' -metadata title=' . escapeshellarg($name) .
+                       ' -metadata album=' . escapeshellarg($todayDate) .
+                       ' -metadata genre=' . escapeshellarg('Voice Recording') .
+                       ' ' . escapeshellarg($outputPath) . ' 2>&1';
             exec($normCmd, $normOutput, $normReturnCode);
 
             @unlink($tempMp3);
@@ -204,7 +209,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $meta = [
                 'artist' => 'Voice Recording',
                 'title' => $name,
-                'album' => '',
+                'album' => $todayDate,
                 'summary' => 'Voice recording created in WombatPlaylist',
                 'recorded' => date('Y-m-d H:i:s')
             ];
