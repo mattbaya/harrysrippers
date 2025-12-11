@@ -7,6 +7,30 @@
 $downloadsDir = __DIR__ . '/downloads';
 $downloadsUrl = 'downloads';
 $playlistsFile = __DIR__ . '/playlists.json';
+$ffprobePath = '/home/harry/bin/ffprobe';
+
+// Get audio duration in seconds using ffprobe
+function getAudioDuration($filePath) {
+    global $ffprobePath;
+    if (!file_exists($filePath)) return 0;
+
+    $cmd = escapeshellcmd($ffprobePath) . ' -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 ' . escapeshellarg($filePath) . ' 2>/dev/null';
+    $duration = trim(shell_exec($cmd));
+    return floatval($duration);
+}
+
+// Format seconds to MM:SS or HH:MM:SS
+function formatDuration($seconds) {
+    $seconds = intval($seconds);
+    $hours = floor($seconds / 3600);
+    $mins = floor(($seconds % 3600) / 60);
+    $secs = $seconds % 60;
+
+    if ($hours > 0) {
+        return sprintf('%d:%02d:%02d', $hours, $mins, $secs);
+    }
+    return sprintf('%d:%02d', $mins, $secs);
+}
 
 // Load playlists
 function loadPlaylists() {
@@ -38,13 +62,18 @@ function getAvailableFiles() {
         $metaPath = $file . '.meta';
         $meta = file_exists($metaPath) ? json_decode(file_get_contents($metaPath), true) : [];
 
+        // Get duration
+        $duration = getAudioDuration($file);
+
         $files[] = [
             'name' => $basename,
             'url' => $downloadsUrl . '/' . rawurlencode($basename),
             'artist' => $meta['artist'] ?? '',
             'title' => $meta['title'] ?? '',
             'size' => filesize($file),
-            'modified' => filemtime($file)
+            'modified' => filemtime($file),
+            'duration' => $duration,
+            'duration_formatted' => formatDuration($duration)
         ];
     }
 
@@ -217,6 +246,133 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 exit;
             }
             echo json_encode(['success' => true, 'playlist' => $playlists[$playlistId]]);
+            exit;
+
+        case 'merge_playlist':
+            $playlistId = $_POST['playlist_id'] ?? '';
+            if (!isset($playlists[$playlistId])) {
+                echo json_encode(['success' => false, 'error' => 'Playlist not found']);
+                exit;
+            }
+
+            $playlist = $playlists[$playlistId];
+            if (empty($playlist['tracks'])) {
+                echo json_encode(['success' => false, 'error' => 'Playlist has no tracks']);
+                exit;
+            }
+
+            // Verify all files exist
+            $inputFiles = [];
+            foreach ($playlist['tracks'] as $track) {
+                $filePath = $downloadsDir . '/' . $track['filename'];
+                if (!file_exists($filePath)) {
+                    echo json_encode(['success' => false, 'error' => 'Track not found: ' . $track['filename']]);
+                    exit;
+                }
+                $inputFiles[] = $filePath;
+            }
+
+            // Create output filename
+            $safeName = preg_replace('/[^a-zA-Z0-9_\-\s]/', '', $playlist['name']);
+            $safeName = trim($safeName) ?: 'Merged_Playlist';
+            $outputFilename = $safeName . ' (Full Mix).mp3';
+            $outputPath = $downloadsDir . '/' . $outputFilename;
+
+            // Ensure unique filename
+            $counter = 1;
+            while (file_exists($outputPath)) {
+                $outputFilename = $safeName . ' (Full Mix) ' . $counter . '.mp3';
+                $outputPath = $downloadsDir . '/' . $outputFilename;
+                $counter++;
+            }
+
+            // Create concat list file
+            $concatListFile = sys_get_temp_dir() . '/concat_' . uniqid() . '.txt';
+            $concatContent = '';
+            foreach ($inputFiles as $file) {
+                $concatContent .= "file " . escapeshellarg($file) . "\n";
+            }
+            file_put_contents($concatListFile, $concatContent);
+
+            // First pass: concatenate all files
+            $tempConcat = sys_get_temp_dir() . '/concat_' . uniqid() . '.mp3';
+            $cmd1 = escapeshellcmd($ffmpegPath) . ' -f concat -safe 0 -i ' . escapeshellarg($concatListFile) .
+                    ' -c copy ' . escapeshellarg($tempConcat) . ' 2>&1';
+            exec($cmd1, $output1, $returnCode1);
+
+            if ($returnCode1 !== 0 || !file_exists($tempConcat)) {
+                @unlink($concatListFile);
+                echo json_encode(['success' => false, 'error' => 'Concatenation failed']);
+                exit;
+            }
+
+            // Second pass: normalize audio using loudnorm (two-pass for best results)
+            // First, analyze the audio
+            $analyzeCmd = escapeshellcmd($ffmpegPath) . ' -i ' . escapeshellarg($tempConcat) .
+                          ' -af loudnorm=I=-16:TP=-1.5:LRA=11:print_format=json -f null - 2>&1';
+            $analyzeOutput = shell_exec($analyzeCmd);
+
+            // Extract loudnorm stats from output
+            preg_match('/\{[^}]+\}/s', $analyzeOutput, $matches);
+            $loudnormStats = null;
+            if (!empty($matches[0])) {
+                $loudnormStats = json_decode($matches[0], true);
+            }
+
+            // Apply normalization
+            if ($loudnormStats) {
+                // Two-pass normalization with measured values
+                $normCmd = escapeshellcmd($ffmpegPath) . ' -i ' . escapeshellarg($tempConcat) .
+                           ' -af loudnorm=I=-16:TP=-1.5:LRA=11:' .
+                           'measured_I=' . ($loudnormStats['input_i'] ?? '-24') . ':' .
+                           'measured_TP=' . ($loudnormStats['input_tp'] ?? '-2') . ':' .
+                           'measured_LRA=' . ($loudnormStats['input_lra'] ?? '7') . ':' .
+                           'measured_thresh=' . ($loudnormStats['input_thresh'] ?? '-34') . ':' .
+                           'offset=' . ($loudnormStats['target_offset'] ?? '0') . ':linear=true ' .
+                           '-ar 44100 -b:a 192k ' . escapeshellarg($outputPath) . ' 2>&1';
+            } else {
+                // Single-pass normalization as fallback
+                $normCmd = escapeshellcmd($ffmpegPath) . ' -i ' . escapeshellarg($tempConcat) .
+                           ' -af loudnorm=I=-16:TP=-1.5:LRA=11 -ar 44100 -b:a 192k ' .
+                           escapeshellarg($outputPath) . ' 2>&1';
+            }
+
+            exec($normCmd, $normOutput, $normReturnCode);
+
+            // Cleanup temp files
+            @unlink($concatListFile);
+            @unlink($tempConcat);
+
+            if ($normReturnCode !== 0 || !file_exists($outputPath)) {
+                echo json_encode(['success' => false, 'error' => 'Normalization failed']);
+                exit;
+            }
+
+            // Calculate total duration
+            $totalDuration = 0;
+            foreach ($inputFiles as $file) {
+                $totalDuration += getAudioDuration($file);
+            }
+
+            // Create meta file for merged playlist
+            $trackList = array_map(function($t) { return $t['filename']; }, $playlist['tracks']);
+            $meta = [
+                'artist' => 'Various Artists',
+                'title' => $playlist['name'] . ' (Full Mix)',
+                'album' => 'WombatPlaylist Merge',
+                'summary' => 'Merged playlist containing ' . count($playlist['tracks']) . ' tracks: ' . implode(', ', $trackList),
+                'merged' => date('Y-m-d H:i:s'),
+                'source_playlist' => $playlist['name'],
+                'track_count' => count($playlist['tracks'])
+            ];
+            file_put_contents($outputPath . '.meta', json_encode($meta, JSON_PRETTY_PRINT));
+
+            echo json_encode([
+                'success' => true,
+                'filename' => $outputFilename,
+                'duration' => formatDuration($totalDuration),
+                'track_count' => count($playlist['tracks'])
+            ]);
             exit;
     }
 }
@@ -755,7 +911,10 @@ $availableFiles = getAvailableFiles();
                                             <?= htmlspecialchars($file['name']) ?>
                                         <?php endif; ?>
                                     </div>
-                                    <div class="file-meta"><?= round($file['size'] / 1048576, 1) ?> MB</div>
+                                    <div class="file-meta">
+                                        <span style="color: #667eea;"><?= $file['duration_formatted'] ?></span>
+                                        <span style="margin-left: 8px;"><?= round($file['size'] / 1048576, 1) ?> MB</span>
+                                    </div>
                                 </div>
                                 <button class="btn btn-small btn-success add-to-playlist" onclick="addToPlaylist('<?= htmlspecialchars($file['name'], ENT_QUOTES) ?>')">+ Add</button>
                             </div>
@@ -963,11 +1122,33 @@ $availableFiles = getAvailableFiles();
                 return;
             }
 
-            let html = '<div class="track-list" id="trackList">';
+            // Calculate total duration
+            let totalDuration = 0;
+            currentPlaylist.tracks.forEach(track => {
+                const fileData = availableFilesData.find(f => f.name === track.filename);
+                if (fileData && fileData.duration) {
+                    totalDuration += fileData.duration;
+                }
+            });
+
+            let html = `
+                <div class="playlist-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; padding-bottom: 10px; border-bottom: 1px solid rgba(255,255,255,0.1);">
+                    <div>
+                        <span style="color: #888; font-size: 13px;">${currentPlaylist.tracks.length} tracks</span>
+                        <span style="color: #667eea; font-size: 13px; margin-left: 10px;">Total: ${formatDuration(totalDuration)}</span>
+                    </div>
+                    <button class="btn btn-primary btn-small" onclick="mergePlaylist()" id="mergeBtn">
+                        🎚️ Create Full Mix
+                    </button>
+                </div>
+            `;
+
+            html += '<div class="track-list" id="trackList">';
             currentPlaylist.tracks.forEach((track, index) => {
                 const fileData = availableFilesData.find(f => f.name === track.filename);
                 const title = fileData?.title || track.filename;
                 const artist = fileData?.artist || '';
+                const duration = fileData?.duration_formatted || '--:--';
 
                 html += `
                     <div class="track-item" data-filename="${escapeHtml(track.filename)}" data-index="${index}">
@@ -975,6 +1156,9 @@ $availableFiles = getAvailableFiles();
                         <div class="track-info" onclick="playTrack(${index})">
                             <div class="track-title">${escapeHtml(title)}</div>
                             ${artist ? `<div class="track-artist">${escapeHtml(artist)}</div>` : ''}
+                        </div>
+                        <div class="track-duration" style="color: #888; font-size: 12px; min-width: 45px; text-align: right;">
+                            ${duration}
                         </div>
                         <div class="track-actions">
                             <button onclick="playTrack(${index})">▶</button>
@@ -993,6 +1177,58 @@ $availableFiles = getAvailableFiles();
                 handle: '.drag-handle',
                 onEnd: saveTrackOrder
             });
+        }
+
+        function formatDuration(seconds) {
+            if (!seconds || isNaN(seconds)) return '0:00';
+            seconds = Math.floor(seconds);
+            const hours = Math.floor(seconds / 3600);
+            const mins = Math.floor((seconds % 3600) / 60);
+            const secs = seconds % 60;
+            if (hours > 0) {
+                return `${hours}:${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+            }
+            return `${mins}:${String(secs).padStart(2, '0')}`;
+        }
+
+        async function mergePlaylist() {
+            if (!currentPlaylistId || !currentPlaylist) {
+                alert('No playlist selected');
+                return;
+            }
+
+            if (currentPlaylist.tracks.length === 0) {
+                alert('Playlist has no tracks');
+                return;
+            }
+
+            const btn = document.getElementById('mergeBtn');
+            const originalText = btn.innerHTML;
+            btn.disabled = true;
+            btn.innerHTML = '⏳ Creating...';
+
+            try {
+                const response = await fetch('wombat-playlist.php', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+                    body: 'action=merge_playlist&playlist_id=' + encodeURIComponent(currentPlaylistId)
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    alert(`Created "${data.filename}"\n\n${data.track_count} tracks merged\nTotal duration: ${data.duration}\n\nThe file has been normalized for consistent volume.`);
+                    location.reload(); // Refresh to show new file
+                } else {
+                    alert('Error: ' + (data.error || 'Failed to merge playlist'));
+                }
+            } catch (err) {
+                console.error('Merge error:', err);
+                alert('Error merging playlist');
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = originalText;
+            }
         }
 
         function saveTrackOrder() {
