@@ -1085,6 +1085,34 @@ function searchArchive($artist, $title) {
             opacity: 0.9;
         }
 
+        .nav-tabs {
+            display: flex;
+            justify-content: center;
+            gap: 10px;
+            margin-top: 15px;
+        }
+
+        .nav-tab {
+            color: rgba(255,255,255,0.7);
+            text-decoration: none;
+            padding: 8px 20px;
+            border-radius: 20px;
+            font-size: 14px;
+            transition: all 0.3s;
+            border: 1px solid rgba(255,255,255,0.2);
+        }
+
+        .nav-tab:hover {
+            background: rgba(255,255,255,0.1);
+            color: white;
+        }
+
+        .nav-tab.active {
+            background: rgba(255,255,255,0.2);
+            color: white;
+            border-color: rgba(255,255,255,0.4);
+        }
+
         .columns {
             display: grid;
             grid-template-columns: 1fr 1fr;
@@ -1872,7 +1900,11 @@ function searchArchive($artist, $title) {
         <div class="header">
             <h1>🎵 Harry's Rippers</h1>
             <p>Convert videos to MP3 audio files</p>
-            <a href="#" class="about-link" onclick="openAboutModal(); return false;">ℹ️ About this application</a>
+            <div class="nav-tabs">
+                <a href="index.php" class="nav-tab active">MP3 Converter</a>
+                <a href="wombat-playlist.php" class="nav-tab">WombatPlaylist</a>
+                <a href="#" class="nav-tab" onclick="openAboutModal(); return false;">About</a>
+            </div>
         </div>
 
         <div class="columns">
