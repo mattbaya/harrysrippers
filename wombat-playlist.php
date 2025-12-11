@@ -358,6 +358,47 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             ]);
             exit;
 
+        case 'save_id3_tags':
+            $filename = $_POST['filename'] ?? '';
+            $artist = $_POST['artist'] ?? '';
+            $title = $_POST['title'] ?? '';
+            $album = $_POST['album'] ?? '';
+
+            $filePath = $downloadsDir . '/' . $filename;
+            if (!file_exists($filePath)) {
+                echo json_encode(['success' => false, 'error' => 'File not found']);
+                exit;
+            }
+
+            // Use ffmpeg to write ID3 tags
+            $tempFile = sys_get_temp_dir() . '/id3_' . uniqid() . '.mp3';
+            $cmd = escapeshellcmd($ffmpegPath) . ' -i ' . escapeshellarg($filePath) .
+                   ' -c copy' .
+                   ' -metadata artist=' . escapeshellarg($artist) .
+                   ' -metadata title=' . escapeshellarg($title) .
+                   ' -metadata album=' . escapeshellarg($album) .
+                   ' ' . escapeshellarg($tempFile) . ' 2>&1';
+            exec($cmd, $output, $returnCode);
+
+            if ($returnCode === 0 && file_exists($tempFile)) {
+                // Replace original with tagged version
+                rename($tempFile, $filePath);
+
+                // Update .meta file
+                $metaPath = $filePath . '.meta';
+                $meta = file_exists($metaPath) ? json_decode(file_get_contents($metaPath), true) : [];
+                $meta['artist'] = $artist;
+                $meta['title'] = $title;
+                $meta['album'] = $album;
+                file_put_contents($metaPath, json_encode($meta, JSON_PRETTY_PRINT));
+
+                echo json_encode(['success' => true]);
+            } else {
+                @unlink($tempFile);
+                echo json_encode(['success' => false, 'error' => 'Failed to save tags']);
+            }
+            exit;
+
         case 'edit_normalize':
             $filename = $_POST['filename'] ?? '';
             $filePath = $downloadsDir . '/' . $filename;
@@ -1715,9 +1756,29 @@ $availableFiles = getAvailableFiles();
 
     <!-- Edit Track Modal -->
     <div class="modal" id="editModal">
-        <div class="modal-content" style="width: 450px;">
+        <div class="modal-content" style="width: 450px; max-height: 90vh; overflow-y: auto;">
             <h3>⚙️ Edit Track</h3>
-            <p id="editTrackName" style="color: #888; margin-bottom: 20px; font-size: 14px; word-break: break-all;"></p>
+            <p id="editTrackName" style="color: #888; margin-bottom: 15px; font-size: 14px; word-break: break-all;"></p>
+
+            <!-- ID3 Tag Editing -->
+            <div id="id3EditSection" style="margin-bottom: 20px; padding: 15px; background: rgba(255,255,255,0.05); border-radius: 8px;">
+                <h4 style="color: #667eea; margin-bottom: 12px; font-size: 14px;">🏷️ ID3 Tags</h4>
+                <div style="display: flex; flex-direction: column; gap: 10px;">
+                    <div>
+                        <label style="font-size: 12px; color: #888; display: block; margin-bottom: 3px;">Artist</label>
+                        <input type="text" id="editArtist" placeholder="Artist name" style="width: 100%; padding: 8px; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); border-radius: 5px; color: #fff; font-size: 13px;">
+                    </div>
+                    <div>
+                        <label style="font-size: 12px; color: #888; display: block; margin-bottom: 3px;">Title</label>
+                        <input type="text" id="editTitle" placeholder="Track title" style="width: 100%; padding: 8px; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); border-radius: 5px; color: #fff; font-size: 13px;">
+                    </div>
+                    <div>
+                        <label style="font-size: 12px; color: #888; display: block; margin-bottom: 3px;">Album</label>
+                        <input type="text" id="editAlbum" placeholder="Album name" style="width: 100%; padding: 8px; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); border-radius: 5px; color: #fff; font-size: 13px;">
+                    </div>
+                    <button class="btn btn-small btn-primary" onclick="saveID3Tags()" style="margin-top: 5px;">Save Tags</button>
+                </div>
+            </div>
 
             <div id="editOptions" style="display: flex; flex-direction: column; gap: 10px;">
                 <button class="btn btn-outline" onclick="editNormalize()" style="text-align: left; padding: 12px 15px;">
@@ -2399,12 +2460,55 @@ $availableFiles = getAvailableFiles();
             editingIsVoice = isVoice;
             document.getElementById('editTrackName').textContent = filename;
             document.getElementById('voiceBedOption').style.display = isVoice ? 'block' : 'none';
+
+            // Populate ID3 fields from availableFilesData
+            const fileData = availableFilesData.find(f => f.name === filename);
+            document.getElementById('editArtist').value = fileData?.artist || '';
+            document.getElementById('editTitle').value = fileData?.title || '';
+            document.getElementById('editAlbum').value = fileData?.album || '';
+
             document.getElementById('editModal').classList.add('active');
         }
 
         function hideEditModal() {
             document.getElementById('editModal').classList.remove('active');
             editingFilename = '';
+        }
+
+        async function saveID3Tags() {
+            if (!editingFilename) return;
+
+            const artist = document.getElementById('editArtist').value.trim();
+            const title = document.getElementById('editTitle').value.trim();
+            const album = document.getElementById('editAlbum').value.trim();
+
+            try {
+                const response = await fetch('wombat-playlist.php', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+                    body: 'action=save_id3_tags&filename=' + encodeURIComponent(editingFilename) +
+                          '&artist=' + encodeURIComponent(artist) +
+                          '&title=' + encodeURIComponent(title) +
+                          '&album=' + encodeURIComponent(album)
+                });
+                const data = await response.json();
+
+                if (data.success) {
+                    // Update local data
+                    const fileIndex = availableFilesData.findIndex(f => f.name === editingFilename);
+                    if (fileIndex >= 0) {
+                        availableFilesData[fileIndex].artist = artist;
+                        availableFilesData[fileIndex].title = title;
+                        availableFilesData[fileIndex].album = album;
+                    }
+                    alert('Tags saved successfully');
+                    location.reload();
+                } else {
+                    alert('Error: ' + (data.error || 'Failed to save tags'));
+                }
+            } catch (err) {
+                alert('Failed to save tags');
+            }
         }
 
         async function editNormalize() {
