@@ -94,7 +94,7 @@ if (isset($_GET['delete']) && !empty($_GET['delete'])) {
     $filePath = $downloadsDir . '/' . $fileToDelete;
     $metaPath = $filePath . '.meta';
     $waveformPath = $downloadsDir . '/' . pathinfo($fileToDelete, PATHINFO_FILENAME) . '_waveform.png';
-    $backupPath = $downloadsDir . '/' . pathinfo($fileToDelete, PATHINFO_FILENAME) . '_backup.mp3';
+    $backupPath = $downloadsDir . '/backups/' . pathinfo($fileToDelete, PATHINFO_FILENAME) . '_backup.mp3';
     if (file_exists($filePath) && is_file($filePath)) {
         unlink($filePath);
         if (file_exists($metaPath)) {
@@ -234,6 +234,10 @@ if (isset($_POST['trim_audio']) && !empty($_POST['filename'])) {
         $startSeconds = parseTimeToSeconds($startTime);
         $endSeconds = parseTimeToSeconds($endTime);
 
+        // Read existing metadata from .meta file
+        $metaPath = $filePath . '.meta';
+        $metaData = file_exists($metaPath) ? json_decode(file_get_contents($metaPath), true) : [];
+
         // Create temporary output file
         $tempFile = $downloadsDir . '/temp_' . time() . '_' . $filename;
 
@@ -252,7 +256,7 @@ if (isset($_POST['trim_audio']) && !empty($_POST['filename'])) {
             $ffmpegCommand .= sprintf(' -to %s', escapeshellarg($endSeconds));
         }
 
-        $ffmpegCommand .= sprintf(' -c copy %s 2>&1', escapeshellarg($tempFile));
+        $ffmpegCommand .= sprintf(' -map_metadata 0 -c copy %s 2>&1', escapeshellarg($tempFile));
 
         // Execute trim
         exec($ffmpegCommand, $trimOutput, $trimReturnCode);
@@ -261,6 +265,16 @@ if (isset($_POST['trim_audio']) && !empty($_POST['filename'])) {
             // Replace original with trimmed version
             unlink($filePath);
             rename($tempFile, $filePath);
+
+            // Re-apply ID3 tags from meta file
+            if (!empty($metaData['artist']) || !empty($metaData['title'])) {
+                $metadata = [
+                    'artist' => $metaData['artist'] ?? '',
+                    'title' => $metaData['title'] ?? '',
+                    'album' => $metaData['album'] ?? ''
+                ];
+                updateMp3Metadata($filePath, $metadata, $metaData['url'] ?? '');
+            }
 
             // Delete old waveform so it will be regenerated
             $waveformPath = $downloadsDir . '/' . pathinfo($filename, PATHINFO_FILENAME) . '_waveform.png';
@@ -286,7 +300,11 @@ if (isset($_POST['normalize_audio']) && !empty($_POST['filename'])) {
 
     if (file_exists($filePath)) {
         // Create backup of original file before normalizing
-        $backupPath = $downloadsDir . '/' . pathinfo($filename, PATHINFO_FILENAME) . '_backup.mp3';
+        $backupsDir = $downloadsDir . '/backups';
+        if (!is_dir($backupsDir)) {
+            mkdir($backupsDir, 0755, true);
+        }
+        $backupPath = $backupsDir . '/' . pathinfo($filename, PATHINFO_FILENAME) . '_backup.mp3';
 
         // Only create backup if one doesn't already exist
         if (!file_exists($backupPath)) {
@@ -296,13 +314,31 @@ if (isset($_POST['normalize_audio']) && !empty($_POST['filename'])) {
         // Create temporary output file
         $tempFile = $downloadsDir . '/temp_norm_' . time() . '_' . $filename;
 
+        // First, detect the current peak level
+        $peakLevel = getAudioPeakLevel($filePath);
+
+        // Calculate gain needed to bring peak to -1dB
+        // If peak is -6dB, we need +5dB gain to reach -1dB
+        $targetPeak = -1.0;
+        $gainNeeded = $targetPeak - $peakLevel;
+
+        // Cap the gain at +20dB to avoid extreme amplification of very quiet files
+        $gainNeeded = min($gainNeeded, 20);
+
+        // Read existing metadata from .meta file
+        $metaPath = $filePath . '.meta';
+        $metaData = file_exists($metaPath) ? json_decode(file_get_contents($metaPath), true) : [];
+
         // Use ffmpeg with:
         // 1. silenceremove to trim silence from start and end (threshold -50dB, minimum 0.5s)
-        // 2. loudnorm for EBU R128 normalization
+        // 2. volume filter for peak normalization (bring loudest part to -1dB)
+        // 3. limiter to prevent clipping
+        // 4. map_metadata to preserve existing tags
         $ffmpegCommand = sprintf(
-            '%s -i %s -af "silenceremove=start_periods=1:start_silence=0.5:start_threshold=-50dB:detection=peak,areverse,silenceremove=start_periods=1:start_silence=0.5:start_threshold=-50dB:detection=peak,areverse,loudnorm=I=-16:TP=-1.5:LRA=11" -ar 44100 -ab 192k %s 2>&1',
+            '%s -i %s -af "silenceremove=start_periods=1:start_silence=0.5:start_threshold=-50dB:detection=peak,areverse,silenceremove=start_periods=1:start_silence=0.5:start_threshold=-50dB:detection=peak,areverse,volume=%sdB,alimiter=limit=0.95:attack=5:release=50" -map_metadata 0 -ar 44100 -ab 192k %s 2>&1',
             escapeshellarg($ffmpegPath),
             escapeshellarg($filePath),
+            $gainNeeded,
             escapeshellarg($tempFile)
         );
 
@@ -312,6 +348,16 @@ if (isset($_POST['normalize_audio']) && !empty($_POST['filename'])) {
             // Replace original with normalized version
             unlink($filePath);
             rename($tempFile, $filePath);
+
+            // Re-apply ID3 tags from meta file
+            if (!empty($metaData['artist']) || !empty($metaData['title'])) {
+                $metadata = [
+                    'artist' => $metaData['artist'] ?? '',
+                    'title' => $metaData['title'] ?? '',
+                    'album' => $metaData['album'] ?? ''
+                ];
+                updateMp3Metadata($filePath, $metadata, $metaData['url'] ?? '');
+            }
 
             // Delete old waveform so it will be regenerated
             $waveformPath = $downloadsDir . '/' . pathinfo($filename, PATHINFO_FILENAME) . '_waveform.png';
@@ -338,14 +384,28 @@ if (isset($_POST['normalize_audio']) && !empty($_POST['filename'])) {
 if (isset($_POST['restore_backup']) && !empty($_POST['filename'])) {
     $filename = basename($_POST['filename']);
     $filePath = $downloadsDir . '/' . $filename;
-    $backupPath = $downloadsDir . '/' . pathinfo($filename, PATHINFO_FILENAME) . '_backup.mp3';
+    $backupPath = $downloadsDir . '/backups/' . pathinfo($filename, PATHINFO_FILENAME) . '_backup.mp3';
 
     if (file_exists($backupPath)) {
+        // Read existing metadata from .meta file
+        $metaPath = $filePath . '.meta';
+        $metaData = file_exists($metaPath) ? json_decode(file_get_contents($metaPath), true) : [];
+
         // Replace normalized file with backup
         if (file_exists($filePath)) {
             unlink($filePath);
         }
         rename($backupPath, $filePath);
+
+        // Re-apply ID3 tags from meta file
+        if (!empty($metaData['artist']) || !empty($metaData['title'])) {
+            $metadata = [
+                'artist' => $metaData['artist'] ?? '',
+                'title' => $metaData['title'] ?? '',
+                'album' => $metaData['album'] ?? ''
+            ];
+            updateMp3Metadata($filePath, $metadata, $metaData['url'] ?? '');
+        }
 
         // Delete waveform so it will be regenerated
         $waveformPath = $downloadsDir . '/' . pathinfo($filename, PATHINFO_FILENAME) . '_waveform.png';
@@ -353,6 +413,85 @@ if (isset($_POST['restore_backup']) && !empty($_POST['filename'])) {
             unlink($waveformPath);
         }
     }
+
+    header('Location: ' . $_SERVER['PHP_SELF']);
+    exit;
+}
+
+// Handle reprocess all files
+if (isset($_POST['reprocess_all'])) {
+    $files = glob($downloadsDir . '/*.mp3');
+    $logFile = __DIR__ . '/rip_log.json';
+    $log = file_exists($logFile) ? json_decode(file_get_contents($logFile), true) : [];
+
+    foreach ($files as $filepath) {
+        $basename = basename($filepath);
+
+        // Skip backup files
+        if (strpos($basename, '_backup') !== false) {
+            continue;
+        }
+
+        // Get video title from filename (remove YouTube ID suffix and extension)
+        $videoTitle = preg_replace('/-[a-zA-Z0-9_-]{11}\.mp3$/', '', $basename);
+        $videoTitle = str_replace('_', ' ', $videoTitle);
+
+        // Read existing meta file if it exists
+        $metaPath = $filepath . '.meta';
+        $existingMeta = file_exists($metaPath) ? json_decode(file_get_contents($metaPath), true) : [];
+        $originalUrl = $existingMeta['url'] ?? '';
+
+        // Parse with AI
+        if (!empty($openaiApiKey)) {
+            $parsedMetadata = parseVideoTitle($videoTitle, $openaiApiKey, '', '');
+
+            if ($parsedMetadata && !empty($parsedMetadata['artist']) && !empty($parsedMetadata['title'])) {
+                // Update MP3 metadata
+                updateMp3Metadata($filepath, $parsedMetadata, $originalUrl);
+
+                // Create new filename
+                $newFilename = $parsedMetadata['artist'] . ' - ' . $parsedMetadata['title'] . '.mp3';
+                $newFilename = preg_replace('/[<>:"\/\\|?*]/', '', $newFilename); // Remove invalid chars
+                $newPath = $downloadsDir . '/' . $newFilename;
+
+                // Only rename if different and target doesn't exist
+                if ($filepath !== $newPath && !file_exists($newPath)) {
+                    // Rename the MP3 file
+                    rename($filepath, $newPath);
+
+                    // Move meta file too
+                    if (file_exists($metaPath)) {
+                        $newMetaPath = $newPath . '.meta';
+                        // Update meta content
+                        $existingMeta['artist'] = $parsedMetadata['artist'];
+                        $existingMeta['title'] = $parsedMetadata['title'];
+                        $existingMeta['album'] = $parsedMetadata['album'] ?? '';
+                        $existingMeta['summary'] = $parsedMetadata['summary'] ?? '';
+                        $existingMeta['lyrics_url'] = $parsedMetadata['lyrics_url'] ?? '';
+                        file_put_contents($newMetaPath, json_encode($existingMeta));
+                        unlink($metaPath);
+                    }
+
+                    // Delete old waveform (will be regenerated)
+                    $oldWaveform = $downloadsDir . '/' . pathinfo($basename, PATHINFO_FILENAME) . '_waveform.png';
+                    if (file_exists($oldWaveform)) {
+                        unlink($oldWaveform);
+                    }
+
+                    // Update log entry
+                    foreach ($log as &$entry) {
+                        if ($entry['filename'] === $basename) {
+                            $entry['filename'] = $newFilename;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Save updated log
+    file_put_contents($logFile, json_encode($log, JSON_PRETTY_PRINT));
 
     header('Location: ' . $_SERVER['PHP_SELF']);
     exit;
@@ -409,7 +548,7 @@ if ($files) {
             $peakLevel = getAudioPeakLevel($file);
 
             // Check if backup exists (file has been normalized)
-            $backupPath = $downloadsDir . '/' . pathinfo($basename, PATHINFO_FILENAME) . '_backup.mp3';
+            $backupPath = $downloadsDir . '/backups/' . pathinfo($basename, PATHINFO_FILENAME) . '_backup.mp3';
             $hasBackup = file_exists($backupPath);
 
             $availableFiles[] = [
@@ -583,7 +722,8 @@ function generateWaveform($filepath) {
 
     // Check if waveform already exists
     if (file_exists($waveformFile)) {
-        return $waveformUrl;
+        // Add cache-busting parameter based on file modification time
+        return $waveformUrl . '?t=' . filemtime($waveformFile);
     }
 
     // Generate waveform using ffmpeg
@@ -597,7 +737,8 @@ function generateWaveform($filepath) {
     exec($command, $output, $returnCode);
 
     if ($returnCode === 0 && file_exists($waveformFile)) {
-        return $waveformUrl;
+        // Add cache-busting parameter based on file modification time
+        return $waveformUrl . '?t=' . filemtime($waveformFile);
     }
 
     return '';
@@ -1028,15 +1169,15 @@ function updateMp3Metadata($filepath, $metadata, $sourceUrl = '') {
         }
 
         .file-summary {
-            margin-top: 10px;
-            padding-top: 10px;
+            margin-top: 5px;
+            padding-top: 5px;
             padding-left: 0;
             padding-right: 0;
             border-top: 1px solid #e0e0e0;
-            font-size: 14px;
-            color: #333;
+            font-size: 11px;
+            color: #666;
             font-style: italic;
-            line-height: 1.6;
+            line-height: 1.4;
             text-align: left;
         }
 
@@ -1249,6 +1390,22 @@ function updateMp3Metadata($filepath, $metadata, $sourceUrl = '') {
         .delete-btn:hover {
             background: #fff5f5;
             transform: scale(1.1);
+        }
+
+        .reprocess-btn {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 6px 12px;
+            border-radius: 6px;
+            font-size: 12px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .reprocess-btn:hover {
+            transform: scale(1.05);
+            box-shadow: 0 2px 8px rgba(102, 126, 234, 0.4);
         }
 
         .no-files {
@@ -1504,6 +1661,44 @@ function updateMp3Metadata($filepath, $metadata, $sourceUrl = '') {
             padding: 20px;
         }
 
+        .loading-overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.7);
+            z-index: 10000;
+            justify-content: center;
+            align-items: center;
+            flex-direction: column;
+        }
+
+        .loading-overlay.active {
+            display: flex;
+        }
+
+        .loading-spinner {
+            width: 50px;
+            height: 50px;
+            border: 4px solid #ffffff33;
+            border-top-color: #667eea;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        .loading-text {
+            color: white;
+            margin-top: 20px;
+            font-size: 18px;
+            font-weight: 500;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
         .modal-content {
             background-color: white;
             border-radius: 15px;
@@ -1664,9 +1859,13 @@ function updateMp3Metadata($filepath, $metadata, $sourceUrl = '') {
 
             <!-- Right Column: File List -->
             <div class="panel">
-                <h2>
-                    Available Files
-                    <span class="file-count">(<?php echo count($availableFiles); ?>)</span>
+                <h2 style="display: flex; align-items: center; gap: 15px;">
+                    <span>Available Files <span class="file-count">(<?php echo count($availableFiles); ?>)</span></span>
+                    <?php if (!empty($availableFiles)): ?>
+                    <button onclick="reprocessAll()" class="reprocess-btn" title="Re-parse all files with AI and rename to Artist - Title format">
+                        🔄 Reprocess All
+                    </button>
+                    <?php endif; ?>
                 </h2>
 
                 <!-- Audio Player -->
@@ -1725,7 +1924,13 @@ function updateMp3Metadata($filepath, $metadata, $sourceUrl = '') {
                                             <?php if (!empty($file['duration'])): ?>
                                                 <div class="file-duration">Duration: <?php echo htmlspecialchars($file['duration']); ?></div>
                                             <?php endif; ?>
+                                            <?php if (!empty($file['summary'])): ?>
+                                                <div class="file-summary"><?php echo htmlspecialchars($file['summary']); ?></div>
+                                            <?php endif; ?>
                                         </div>
+                                    </div><!-- End file-content-row -->
+
+                                    <!-- Buttons Row -->
                                     <div class="file-actions-row">
                                         <div class="file-actions">
                                             <div class="download-box" data-filename="<?php echo htmlspecialchars($file['name'], ENT_QUOTES); ?>">
@@ -1791,7 +1996,6 @@ function updateMp3Metadata($filepath, $metadata, $sourceUrl = '') {
                                         </div>
                                         <div class="download-date" data-filename="<?php echo htmlspecialchars($file['name'], ENT_QUOTES); ?>"></div>
                                     </div>
-                                    </div><!-- End file-content-row -->
                                 </div><!-- End file-item-main -->
 
                                 <!-- Waveform Player -->
@@ -1809,12 +2013,6 @@ function updateMp3Metadata($filepath, $metadata, $sourceUrl = '') {
                                         <span class="current-time">0:00:00</span> / <span class="total-time"><?php echo htmlspecialchars($file['duration']); ?></span>
                                     </div>
                                 </div>
-
-                                <?php if (!empty($file['summary'])): ?>
-                                    <div class="file-summary">
-                                        <?php echo htmlspecialchars($file['summary']); ?>
-                                    </div>
-                                <?php endif; ?>
                             </div>
                         <?php endforeach; ?>
                     <?php endif; ?>
@@ -2119,8 +2317,34 @@ function updateMp3Metadata($filepath, $metadata, $sourceUrl = '') {
             modal.classList.remove('active');
         }
 
+        function showLoading(message) {
+            document.getElementById('loadingText').textContent = message || 'Processing...';
+            document.getElementById('loadingOverlay').classList.add('active');
+        }
+
+        function reprocessAll() {
+            if (confirm('Reprocess all files? This will:\n\n• Re-parse all filenames with AI\n• Update MP3 metadata tags\n• Rename files to "Artist - Title" format\n• Regenerate all waveforms\n\nThis may take a while for many files.')) {
+                showLoading('Reprocessing all files... This may take a while.');
+
+                const form = document.createElement('form');
+                form.method = 'POST';
+                form.action = '';
+
+                const input = document.createElement('input');
+                input.type = 'hidden';
+                input.name = 'reprocess_all';
+                input.value = '1';
+                form.appendChild(input);
+
+                document.body.appendChild(form);
+                form.submit();
+            }
+        }
+
         function normalizeAudio(filename) {
-            if (confirm('Normalize this audio file? This will:\n\n• Trim silence from the beginning and end\n• Balance volume levels throughout\n• Make quiet audio louder\n\nYou can restore the original later if needed.')) {
+            if (confirm('Normalize this audio file? This will:\n\n• Trim silence from the beginning and end\n• Maximize volume levels\n• Make quiet audio louder\n\nYou can restore the original later if needed.')) {
+                showLoading('Normalizing audio... This may take a moment.');
+
                 const form = document.createElement('form');
                 form.method = 'POST';
                 form.action = '';
@@ -2144,6 +2368,8 @@ function updateMp3Metadata($filepath, $metadata, $sourceUrl = '') {
 
         function restoreBackup(filename) {
             if (confirm('Restore the original audio file? This will undo the normalization.')) {
+                showLoading('Restoring original audio...');
+
                 const form = document.createElement('form');
                 form.method = 'POST';
                 form.action = '';
@@ -2264,6 +2490,12 @@ function updateMp3Metadata($filepath, $metadata, $sourceUrl = '') {
             }
         }
     </script>
+
+    <!-- Loading Overlay -->
+    <div id="loadingOverlay" class="loading-overlay">
+        <div class="loading-spinner"></div>
+        <div class="loading-text" id="loadingText">Processing...</div>
+    </div>
 
     <!-- About Modal -->
     <div id="aboutModal" class="modal">
