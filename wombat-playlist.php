@@ -459,8 +459,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $seen = []; // For deduplication
 
             foreach ($indexData['files'] ?? [] as $entry) {
-                // Case-insensitive search in artist, title, album, and path
-                $searchText = strtolower(($entry['artist'] ?? '') . ' ' . ($entry['title'] ?? '') . ' ' . ($entry['album'] ?? '') . ' ' . ($entry['path'] ?? ''));
+                // Build comprehensive search text including path with normalized separators
+                $path = $entry['path'] ?? '';
+                // Convert path separators to spaces for better matching (artist/album/file -> artist album file)
+                $pathNormalized = str_replace(['/', '\\', '_', '-'], ' ', $path);
+
+                // Case-insensitive search in artist, title, album, and normalized path
+                $searchText = strtolower(
+                    ($entry['artist'] ?? '') . ' ' .
+                    ($entry['title'] ?? '') . ' ' .
+                    ($entry['album'] ?? '') . ' ' .
+                    $path . ' ' .
+                    $pathNormalized
+                );
+
                 if (strpos($searchText, $query) !== false) {
                     // Deduplicate by artist+title combo
                     $dedupKey = strtolower(($entry['artist'] ?? '') . '|' . ($entry['title'] ?? ''));
