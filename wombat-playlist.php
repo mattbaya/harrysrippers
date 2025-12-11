@@ -591,6 +591,113 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             echo json_encode(['success' => true, 'results' => $results]);
             exit;
 
+        case 'import_m3u':
+            if (!isset($_FILES['m3u_file']) || $_FILES['m3u_file']['error'] !== UPLOAD_ERR_OK) {
+                echo json_encode(['success' => false, 'error' => 'No file uploaded']);
+                exit;
+            }
+
+            $content = file_get_contents($_FILES['m3u_file']['tmp_name']);
+            $lines = preg_split('/\r?\n/', $content);
+
+            $playlistName = 'Imported Playlist';
+            $tracks = [];
+            $currentInfo = null;
+
+            foreach ($lines as $line) {
+                $line = trim($line);
+                if (empty($line)) continue;
+
+                if (strpos($line, '#PLAYLIST:') === 0) {
+                    $playlistName = trim(substr($line, 10));
+                } elseif (strpos($line, '#EXTINF:') === 0) {
+                    // Parse #EXTINF:duration,Artist - Title
+                    $info = substr($line, 8);
+                    if (($commaPos = strpos($info, ',')) !== false) {
+                        $currentInfo = trim(substr($info, $commaPos + 1));
+                    }
+                } elseif (strpos($line, '#') !== 0) {
+                    // This is a file path or URL
+                    $filename = basename(urldecode($line));
+                    // Remove query strings
+                    if (($qPos = strpos($filename, '?')) !== false) {
+                        $filename = substr($filename, 0, $qPos);
+                    }
+
+                    $tracks[] = [
+                        'filename' => $filename,
+                        'info' => $currentInfo,
+                        'original_path' => $line,
+                        'exists' => file_exists($downloadsDir . '/' . $filename)
+                    ];
+                    $currentInfo = null;
+                }
+            }
+
+            // Check for similar files in downloads (fuzzy match)
+            $availableFiles = glob($downloadsDir . '/*.mp3');
+            $availableNames = array_map('basename', $availableFiles);
+
+            foreach ($tracks as &$track) {
+                if (!$track['exists']) {
+                    // Try to find similar file
+                    $searchName = strtolower(pathinfo($track['filename'], PATHINFO_FILENAME));
+                    foreach ($availableNames as $available) {
+                        $availableName = strtolower(pathinfo($available, PATHINFO_FILENAME));
+                        if (strpos($availableName, $searchName) !== false ||
+                            strpos($searchName, $availableName) !== false ||
+                            similar_text($searchName, $availableName) / max(strlen($searchName), strlen($availableName)) > 0.7) {
+                            $track['suggested'] = $available;
+                            break;
+                        }
+                    }
+                }
+            }
+            unset($track);
+
+            echo json_encode([
+                'success' => true,
+                'playlist_name' => $playlistName,
+                'tracks' => $tracks,
+                'total' => count($tracks),
+                'found' => count(array_filter($tracks, fn($t) => $t['exists'])),
+                'missing' => count(array_filter($tracks, fn($t) => !$t['exists']))
+            ]);
+            exit;
+
+        case 'create_from_import':
+            $name = trim($_POST['name'] ?? '');
+            $tracksJson = $_POST['tracks'] ?? '[]';
+            $tracks = json_decode($tracksJson, true);
+
+            if (empty($name)) {
+                echo json_encode(['success' => false, 'error' => 'Name required']);
+                exit;
+            }
+
+            $id = uniqid('pl_');
+            $playlistTracks = [];
+            foreach ($tracks as $track) {
+                if (!empty($track['filename']) && file_exists($downloadsDir . '/' . $track['filename'])) {
+                    $playlistTracks[] = [
+                        'filename' => $track['filename'],
+                        'added' => time()
+                    ];
+                }
+            }
+
+            $playlists[$id] = [
+                'id' => $id,
+                'name' => $name,
+                'description' => 'Imported from M3U',
+                'tracks' => $playlistTracks,
+                'created' => time(),
+                'modified' => time()
+            ];
+            savePlaylists($playlists);
+            echo json_encode(['success' => true, 'id' => $id, 'track_count' => count($playlistTracks)]);
+            exit;
+
         case 'create_playlist':
             $name = trim($_POST['name'] ?? '');
             if (empty($name)) {
@@ -1302,9 +1409,15 @@ $availableFiles = getAvailableFiles();
             <!-- Playlists Panel -->
             <div class="panel">
                 <h2>Playlists</h2>
-                <button class="btn btn-primary" style="width: 100%; margin-bottom: 15px;" onclick="showCreateModal()">
-                    + Create Playlist
-                </button>
+                <div style="display: flex; gap: 10px; margin-bottom: 15px;">
+                    <button class="btn btn-primary" style="flex: 1;" onclick="showCreateModal()">
+                        + Create
+                    </button>
+                    <button class="btn btn-outline" style="flex: 1;" onclick="document.getElementById('importM3uFile').click()">
+                        📥 Import
+                    </button>
+                </div>
+                <input type="file" id="importM3uFile" accept=".m3u,.m3u8" style="display: none;" onchange="importM3u(this.files[0])">
                 <div class="playlist-list" id="playlistList">
                     <?php if (empty($playlists)): ?>
                         <div class="empty-state">
@@ -1497,6 +1610,26 @@ $availableFiles = getAvailableFiles();
             <div class="modal-actions">
                 <button class="btn btn-outline" onclick="hideCreateModal()">Cancel</button>
                 <button class="btn btn-primary" onclick="createPlaylist()">Create</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Import Playlist Modal -->
+    <div class="modal" id="importModal">
+        <div class="modal-content" style="width: 600px; max-height: 80vh; overflow-y: auto;">
+            <h3>📥 Import Playlist</h3>
+            <p id="importPlaylistName" style="color: #667eea; margin-bottom: 15px;"></p>
+
+            <div id="importSummary" style="margin-bottom: 15px; padding: 10px; background: rgba(255,255,255,0.05); border-radius: 5px;">
+                <span id="importFound" style="color: #28a745;"></span>
+                <span id="importMissing" style="color: #ffc107; margin-left: 15px;"></span>
+            </div>
+
+            <div id="importTrackList" style="max-height: 300px; overflow-y: auto;"></div>
+
+            <div class="modal-actions" style="margin-top: 15px;">
+                <button class="btn btn-outline" onclick="hideImportModal()">Cancel</button>
+                <button class="btn btn-primary" onclick="finalizeImport()" id="finalizeImportBtn">Import Playlist</button>
             </div>
         </div>
     </div>
@@ -1914,6 +2047,196 @@ $availableFiles = getAvailableFiles();
                     location.reload();
                 }
             });
+        }
+
+        // ====== M3U IMPORT FUNCTIONALITY ======
+        let importData = null;
+
+        async function importM3u(file) {
+            if (!file) return;
+
+            const formData = new FormData();
+            formData.append('action', 'import_m3u');
+            formData.append('m3u_file', file);
+
+            try {
+                const response = await fetch('wombat-playlist.php', {
+                    method: 'POST',
+                    body: formData
+                });
+                const data = await response.json();
+
+                if (data.success) {
+                    importData = data;
+                    showImportModal(data);
+                } else {
+                    alert('Error: ' + (data.error || 'Import failed'));
+                }
+            } catch (err) {
+                alert('Import failed: ' + err.message);
+            }
+
+            // Reset file input
+            document.getElementById('importM3uFile').value = '';
+        }
+
+        function showImportModal(data) {
+            document.getElementById('importPlaylistName').textContent = data.playlist_name;
+            document.getElementById('importFound').textContent = '✓ ' + data.found + ' tracks found';
+            document.getElementById('importMissing').textContent = data.missing > 0 ? '⚠ ' + data.missing + ' missing' : '';
+
+            let html = '';
+            data.tracks.forEach((track, index) => {
+                const display = track.info || track.filename;
+                if (track.exists) {
+                    html += `
+                        <div class="import-track" data-index="${index}" style="padding: 8px; margin-bottom: 5px; background: rgba(40, 167, 69, 0.1); border-radius: 5px; border-left: 3px solid #28a745;">
+                            <div style="font-size: 13px;">✓ ${escapeHtml(display)}</div>
+                            <div style="font-size: 11px; color: #666;">${escapeHtml(track.filename)}</div>
+                        </div>
+                    `;
+                } else if (track.suggested) {
+                    html += `
+                        <div class="import-track" data-index="${index}" style="padding: 8px; margin-bottom: 5px; background: rgba(255, 193, 7, 0.1); border-radius: 5px; border-left: 3px solid #ffc107;">
+                            <div style="font-size: 13px;">⚠ ${escapeHtml(display)}</div>
+                            <div style="font-size: 11px; color: #888;">Missing: ${escapeHtml(track.filename)}</div>
+                            <div style="font-size: 11px; color: #28a745; margin-top: 3px;">
+                                Similar found: <a href="#" onclick="useSuggested(${index}, '${escapeHtml(track.suggested)}'); return false;">${escapeHtml(track.suggested)}</a>
+                            </div>
+                        </div>
+                    `;
+                } else {
+                    html += `
+                        <div class="import-track" data-index="${index}" style="padding: 8px; margin-bottom: 5px; background: rgba(220, 53, 69, 0.1); border-radius: 5px; border-left: 3px solid #dc3545;">
+                            <div style="font-size: 13px;">✗ ${escapeHtml(display)}</div>
+                            <div style="font-size: 11px; color: #888;">Missing: ${escapeHtml(track.filename)}</div>
+                            <div style="display: flex; gap: 5px; margin-top: 5px;">
+                                <input type="text" id="search_${index}" placeholder="Search..." style="flex: 1; padding: 4px 8px; font-size: 11px; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); border-radius: 3px; color: #fff;">
+                                <button class="btn btn-small btn-outline" onclick="searchForMissing(${index}, 'archive')" style="padding: 4px 8px; font-size: 10px;">Archive</button>
+                                <button class="btn btn-small btn-outline" onclick="searchForMissing(${index}, 'youtube')" style="padding: 4px 8px; font-size: 10px;">YouTube</button>
+                            </div>
+                            <div id="searchResults_${index}" style="display: none; margin-top: 5px; max-height: 100px; overflow-y: auto;"></div>
+                        </div>
+                    `;
+                }
+            });
+
+            document.getElementById('importTrackList').innerHTML = html;
+            document.getElementById('importModal').classList.add('active');
+        }
+
+        function hideImportModal() {
+            document.getElementById('importModal').classList.remove('active');
+            importData = null;
+        }
+
+        function useSuggested(index, filename) {
+            if (importData && importData.tracks[index]) {
+                importData.tracks[index].filename = filename;
+                importData.tracks[index].exists = true;
+                importData.found++;
+                importData.missing--;
+                showImportModal(importData);
+            }
+        }
+
+        async function searchForMissing(index, source) {
+            const searchInput = document.getElementById('search_' + index);
+            const query = searchInput.value.trim() || (importData.tracks[index].info || importData.tracks[index].filename);
+            const resultsDiv = document.getElementById('searchResults_' + index);
+
+            resultsDiv.style.display = 'block';
+            resultsDiv.innerHTML = '<div style="color: #888; font-size: 11px;">Searching...</div>';
+
+            const action = source === 'archive' ? 'search_archive' : 'search_youtube';
+
+            try {
+                const response = await fetch('wombat-playlist.php', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+                    body: 'action=' + action + '&query=' + encodeURIComponent(query)
+                });
+                const data = await response.json();
+
+                if (data.success && data.results.length > 0) {
+                    let html = '';
+                    data.results.slice(0, 5).forEach(result => {
+                        if (source === 'archive') {
+                            const display = (result.artist ? result.artist + ' - ' : '') + result.title;
+                            html += `<div style="padding: 4px; cursor: pointer; font-size: 11px;" onmouseover="this.style.background='rgba(255,255,255,0.1)'" onmouseout="this.style.background=''" onclick="downloadForImport(${index}, 'archive', '${escapeHtml(result.path)}')">${escapeHtml(display)}</div>`;
+                        } else {
+                            html += `<div style="padding: 4px; cursor: pointer; font-size: 11px;" onmouseover="this.style.background='rgba(255,255,255,0.1)'" onmouseout="this.style.background=''" onclick="downloadForImport(${index}, 'youtube', '${escapeHtml(result.url)}')">${escapeHtml(result.title)} (${result.duration || ''})</div>`;
+                        }
+                    });
+                    resultsDiv.innerHTML = html;
+                } else {
+                    resultsDiv.innerHTML = '<div style="color: #888; font-size: 11px;">No results found</div>';
+                }
+            } catch (err) {
+                resultsDiv.innerHTML = '<div style="color: #dc3545; font-size: 11px;">Search failed</div>';
+            }
+        }
+
+        async function downloadForImport(index, source, pathOrUrl) {
+            const resultsDiv = document.getElementById('searchResults_' + index);
+            resultsDiv.innerHTML = '<div style="color: #888; font-size: 11px;">Downloading...</div>';
+
+            if (source === 'archive') {
+                try {
+                    const response = await fetch('wombat-playlist.php', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+                        body: 'action=download_from_archive&path=' + encodeURIComponent(pathOrUrl)
+                    });
+                    const data = await response.json();
+
+                    if (data.success) {
+                        importData.tracks[index].filename = data.filename;
+                        importData.tracks[index].exists = true;
+                        importData.found++;
+                        importData.missing--;
+                        showImportModal(importData);
+                    } else {
+                        resultsDiv.innerHTML = '<div style="color: #dc3545; font-size: 11px;">Download failed</div>';
+                    }
+                } catch (err) {
+                    resultsDiv.innerHTML = '<div style="color: #dc3545; font-size: 11px;">Download failed</div>';
+                }
+            } else {
+                // For YouTube, open the converter in a new tab
+                window.open('index.php?url=' + encodeURIComponent(pathOrUrl), '_blank');
+                resultsDiv.innerHTML = '<div style="color: #ffc107; font-size: 11px;">Converting in new tab. After download, reload this page.</div>';
+            }
+        }
+
+        async function finalizeImport() {
+            if (!importData) return;
+
+            const tracks = importData.tracks.filter(t => t.exists).map(t => ({ filename: t.filename }));
+
+            if (tracks.length === 0) {
+                alert('No tracks available to import');
+                return;
+            }
+
+            try {
+                const response = await fetch('wombat-playlist.php', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+                    body: 'action=create_from_import&name=' + encodeURIComponent(importData.playlist_name) +
+                          '&tracks=' + encodeURIComponent(JSON.stringify(tracks))
+                });
+                const data = await response.json();
+
+                if (data.success) {
+                    alert('Imported playlist with ' + data.track_count + ' tracks');
+                    location.reload();
+                } else {
+                    alert('Error: ' + (data.error || 'Import failed'));
+                }
+            } catch (err) {
+                alert('Import failed');
+            }
         }
 
         function playPlaylist(id) {
