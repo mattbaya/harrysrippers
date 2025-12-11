@@ -93,10 +93,18 @@ if (isset($_GET['delete']) && !empty($_GET['delete'])) {
     $fileToDelete = basename($_GET['delete']); // Security: only basename
     $filePath = $downloadsDir . '/' . $fileToDelete;
     $metaPath = $filePath . '.meta';
+    $waveformPath = $downloadsDir . '/' . pathinfo($fileToDelete, PATHINFO_FILENAME) . '_waveform.png';
+    $backupPath = $downloadsDir . '/' . pathinfo($fileToDelete, PATHINFO_FILENAME) . '_backup.mp3';
     if (file_exists($filePath) && is_file($filePath)) {
         unlink($filePath);
         if (file_exists($metaPath)) {
             unlink($metaPath);
+        }
+        if (file_exists($waveformPath)) {
+            unlink($waveformPath);
+        }
+        if (file_exists($backupPath)) {
+            unlink($backupPath);
         }
     }
     header('Location: ' . $_SERVER['PHP_SELF']);
@@ -117,11 +125,16 @@ if (isset($_POST['rename']) && !empty($_POST['old_name']) && !empty($_POST['new_
     $newPath = $downloadsDir . '/' . $newName;
     $oldMetaPath = $oldPath . '.meta';
     $newMetaPath = $newPath . '.meta';
+    $oldWaveformPath = $downloadsDir . '/' . pathinfo($oldName, PATHINFO_FILENAME) . '_waveform.png';
+    $newWaveformPath = $downloadsDir . '/' . pathinfo($newName, PATHINFO_FILENAME) . '_waveform.png';
 
     if (file_exists($oldPath) && !file_exists($newPath)) {
         rename($oldPath, $newPath);
         if (file_exists($oldMetaPath)) {
             rename($oldMetaPath, $newMetaPath);
+        }
+        if (file_exists($oldWaveformPath)) {
+            rename($oldWaveformPath, $newWaveformPath);
         }
     }
     header('Location: ' . $_SERVER['PHP_SELF']);
@@ -174,11 +187,16 @@ if (isset($_POST['restore_title']) && !empty($_POST['filename']) && !empty($_POS
     $newPath = $downloadsDir . '/' . $newFilename;
     $oldMetaPath = $oldPath . '.meta';
     $newMetaPath = $newPath . '.meta';
+    $oldWaveformPath = $downloadsDir . '/' . pathinfo($filename, PATHINFO_FILENAME) . '_waveform.png';
+    $newWaveformPath = $downloadsDir . '/' . pathinfo($newFilename, PATHINFO_FILENAME) . '_waveform.png';
 
     if (file_exists($oldPath) && !file_exists($newPath)) {
         rename($oldPath, $newPath);
         if (file_exists($oldMetaPath)) {
             rename($oldMetaPath, $newMetaPath);
+        }
+        if (file_exists($oldWaveformPath)) {
+            rename($oldWaveformPath, $newWaveformPath);
         }
     }
     header('Location: ' . $_SERVER['PHP_SELF']);
@@ -243,11 +261,96 @@ if (isset($_POST['trim_audio']) && !empty($_POST['filename'])) {
             // Replace original with trimmed version
             unlink($filePath);
             rename($tempFile, $filePath);
+
+            // Delete old waveform so it will be regenerated
+            $waveformPath = $downloadsDir . '/' . pathinfo($filename, PATHINFO_FILENAME) . '_waveform.png';
+            if (file_exists($waveformPath)) {
+                unlink($waveformPath);
+            }
         } else {
             // Clean up temp file if it exists
             if (file_exists($tempFile)) {
                 unlink($tempFile);
             }
+        }
+    }
+
+    header('Location: ' . $_SERVER['PHP_SELF']);
+    exit;
+}
+
+// Handle audio normalization
+if (isset($_POST['normalize_audio']) && !empty($_POST['filename'])) {
+    $filename = basename($_POST['filename']);
+    $filePath = $downloadsDir . '/' . $filename;
+
+    if (file_exists($filePath)) {
+        // Create backup of original file before normalizing
+        $backupPath = $downloadsDir . '/' . pathinfo($filename, PATHINFO_FILENAME) . '_backup.mp3';
+
+        // Only create backup if one doesn't already exist
+        if (!file_exists($backupPath)) {
+            copy($filePath, $backupPath);
+        }
+
+        // Create temporary output file
+        $tempFile = $downloadsDir . '/temp_norm_' . time() . '_' . $filename;
+
+        // Use ffmpeg with:
+        // 1. silenceremove to trim silence from start and end (threshold -50dB, minimum 0.5s)
+        // 2. loudnorm for EBU R128 normalization
+        $ffmpegCommand = sprintf(
+            '%s -i %s -af "silenceremove=start_periods=1:start_silence=0.5:start_threshold=-50dB:detection=peak,areverse,silenceremove=start_periods=1:start_silence=0.5:start_threshold=-50dB:detection=peak,areverse,loudnorm=I=-16:TP=-1.5:LRA=11" -ar 44100 -ab 192k %s 2>&1',
+            escapeshellarg($ffmpegPath),
+            escapeshellarg($filePath),
+            escapeshellarg($tempFile)
+        );
+
+        exec($ffmpegCommand, $normOutput, $normReturnCode);
+
+        if ($normReturnCode === 0 && file_exists($tempFile)) {
+            // Replace original with normalized version
+            unlink($filePath);
+            rename($tempFile, $filePath);
+
+            // Delete old waveform so it will be regenerated
+            $waveformPath = $downloadsDir . '/' . pathinfo($filename, PATHINFO_FILENAME) . '_waveform.png';
+            if (file_exists($waveformPath)) {
+                unlink($waveformPath);
+            }
+        } else {
+            // Clean up temp file if it exists
+            if (file_exists($tempFile)) {
+                unlink($tempFile);
+            }
+            // If normalization failed, remove the backup we just created
+            if (file_exists($backupPath)) {
+                unlink($backupPath);
+            }
+        }
+    }
+
+    header('Location: ' . $_SERVER['PHP_SELF']);
+    exit;
+}
+
+// Handle restore from backup
+if (isset($_POST['restore_backup']) && !empty($_POST['filename'])) {
+    $filename = basename($_POST['filename']);
+    $filePath = $downloadsDir . '/' . $filename;
+    $backupPath = $downloadsDir . '/' . pathinfo($filename, PATHINFO_FILENAME) . '_backup.mp3';
+
+    if (file_exists($backupPath)) {
+        // Replace normalized file with backup
+        if (file_exists($filePath)) {
+            unlink($filePath);
+        }
+        rename($backupPath, $filePath);
+
+        // Delete waveform so it will be regenerated
+        $waveformPath = $downloadsDir . '/' . pathinfo($filename, PATHINFO_FILENAME) . '_waveform.png';
+        if (file_exists($waveformPath)) {
+            unlink($waveformPath);
         }
     }
 
@@ -299,6 +402,16 @@ if ($files) {
                 $imageUrl = isset($metaData['image_url']) ? $metaData['image_url'] : '';
             }
 
+            // Get duration, waveform, and peak level
+            $duration = getMp3Duration($file);
+            $durationSeconds = getMp3Duration($file, false);
+            $waveformUrl = generateWaveform($file);
+            $peakLevel = getAudioPeakLevel($file);
+
+            // Check if backup exists (file has been normalized)
+            $backupPath = $downloadsDir . '/' . pathinfo($basename, PATHINFO_FILENAME) . '_backup.mp3';
+            $hasBackup = file_exists($backupPath);
+
             $availableFiles[] = [
                 'name' => $basename,
                 'size' => filesize($file),
@@ -311,7 +424,13 @@ if ($files) {
                 'video_title' => $videoTitle,
                 'summary' => $summary,
                 'lyrics_url' => $lyricsUrl,
-                'image_url' => $imageUrl
+                'image_url' => $imageUrl,
+                'duration' => $duration,
+                'duration_seconds' => $durationSeconds,
+                'waveform_url' => $waveformUrl,
+                'peak_level' => $peakLevel,
+                'needs_normalize' => needsNormalization($peakLevel),
+                'has_backup' => $hasBackup
             ];
         }
     }
@@ -365,6 +484,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_POST['url'])) {
             $videoDescription = trim(implode("\n", $descOutput));
         }
 
+        // Get channel name as fallback artist
+        $channelName = '';
+        $channelCommand = sprintf(
+            '%s --print channel --no-playlist %s 2>/dev/null',
+            escapeshellarg($ytDlpPath),
+            escapeshellarg($url)
+        );
+        exec($channelCommand, $channelOutput, $channelReturnCode);
+        if ($channelReturnCode === 0 && !empty($channelOutput)) {
+            $channelName = trim(implode(' ', $channelOutput));
+        }
+
         // Get list of files before download
         $filesBefore = glob($downloadsDir . '/*.mp3');
 
@@ -393,7 +524,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_POST['url'])) {
                 // Parse video title with ChatGPT and update MP3 metadata
                 $parsedMetadata = null;
                 if (!empty($videoTitle) && !empty($openaiApiKey)) {
-                    $parsedMetadata = parseVideoTitle($videoTitle, $openaiApiKey, $videoDescription);
+                    $parsedMetadata = parseVideoTitle($videoTitle, $openaiApiKey, $videoDescription, $channelName);
                     if ($parsedMetadata) {
                         updateMp3Metadata($filepath, $parsedMetadata, $url);
                     }
@@ -441,6 +572,86 @@ function formatFileSize($bytes) {
     } else {
         return $bytes . ' bytes';
     }
+}
+
+function generateWaveform($filepath) {
+    global $ffmpegPath, $downloadsDir, $downloadsUrl;
+
+    $basename = basename($filepath);
+    $waveformFile = $downloadsDir . '/' . pathinfo($basename, PATHINFO_FILENAME) . '_waveform.png';
+    $waveformUrl = $downloadsUrl . '/' . rawurlencode(pathinfo($basename, PATHINFO_FILENAME) . '_waveform.png');
+
+    // Check if waveform already exists
+    if (file_exists($waveformFile)) {
+        return $waveformUrl;
+    }
+
+    // Generate waveform using ffmpeg
+    $command = sprintf(
+        '%s -i %s -filter_complex "showwavespic=s=800x60:colors=#667eea" -frames:v 1 %s 2>/dev/null',
+        escapeshellarg($ffmpegPath),
+        escapeshellarg($filepath),
+        escapeshellarg($waveformFile)
+    );
+
+    exec($command, $output, $returnCode);
+
+    if ($returnCode === 0 && file_exists($waveformFile)) {
+        return $waveformUrl;
+    }
+
+    return '';
+}
+
+function getAudioPeakLevel($filepath) {
+    global $ffmpegPath;
+
+    // Use ffmpeg volumedetect to get the max volume
+    $command = sprintf(
+        '%s -i %s -af "volumedetect" -f null /dev/null 2>&1',
+        escapeshellarg($ffmpegPath),
+        escapeshellarg($filepath)
+    );
+
+    $output = shell_exec($command);
+
+    // Parse max_volume from output (e.g., "max_volume: -10.5 dB")
+    if (preg_match('/max_volume:\s*([-\d.]+)\s*dB/', $output, $matches)) {
+        return floatval($matches[1]);
+    }
+
+    return 0; // Assume normalized if we can't detect
+}
+
+function needsNormalization($peakLevel) {
+    // If peak is below -3dB, the audio could benefit from normalization
+    return $peakLevel < -3.0;
+}
+
+function getMp3Duration($filepath, $formatted = true) {
+    global $ffmpegPath;
+    $ffprobePath = dirname($ffmpegPath) . '/ffprobe';
+
+    $command = sprintf(
+        '%s -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 %s 2>/dev/null',
+        escapeshellarg($ffprobePath),
+        escapeshellarg($filepath)
+    );
+
+    $output = shell_exec($command);
+    if ($output !== null) {
+        $seconds = floatval(trim($output));
+        if ($seconds > 0) {
+            if (!$formatted) {
+                return $seconds;
+            }
+            $mins = floor($seconds / 60);
+            $secs = floor($seconds % 60);
+            $hundredths = floor(($seconds - floor($seconds)) * 100);
+            return sprintf('%d:%02d:%02d', $mins, $secs, $hundredths);
+        }
+    }
+    return $formatted ? '' : 0;
 }
 
 function formatTimeAgo($timestamp) {
@@ -493,13 +704,17 @@ function getYouTubeThumbnail($url) {
 }
 
 // Function to parse video title using OpenAI API
-function parseVideoTitle($videoTitle, $apiKey, $description = '') {
+function parseVideoTitle($videoTitle, $apiKey, $description = '', $channelName = '') {
     if (empty($apiKey)) {
         return null;
     }
 
     $prompt = "Parse this video information and extract information about the song. Pay special attention to who is ACTUALLY PERFORMING the song (especially for covers). Return ONLY a JSON object with these keys:
 - 'artist': The name of the artist/band ACTUALLY PERFORMING (not the original artist if it's a cover)
+  * If no artist is mentioned in the title or description, use the YouTube channel name as the artist
+  * Clean up the channel name to just be the person's name - remove suffixes like '-songwriter', ' Official', ' Music', ' VEVO', ' - Topic', etc.
+  * Example: 'Alan Wagstaff-songwriter' should become 'Alan Wagstaff'
+  * Example: 'Taylor Swift Official' should become 'Taylor Swift'
 - 'title': Song title
 - 'album': Album name (empty string if not mentioned)
 - 'summary': A brief 1-2 sentence description of the song (genre, mood, significance, etc.)
@@ -510,6 +725,10 @@ function parseVideoTitle($videoTitle, $apiKey, $description = '') {
   * Only leave empty if it's clearly not a real song (instrumentals, sound effects, etc.)
 
 Video title: " . $videoTitle;
+
+    if (!empty($channelName)) {
+        $prompt .= "\n\nYouTube channel name: " . $channelName;
+    }
 
     if (!empty($description)) {
         $prompt .= "\n\nVideo description: " . substr($description, 0, 500); // Limit description length
@@ -786,7 +1005,25 @@ function updateMp3Metadata($filepath, $metadata, $sourceUrl = '') {
 
         .file-item-main {
             display: flex;
-            justify-content: space-between;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .file-title-row {
+            font-size: 15px;
+            font-weight: 600;
+            color: #333;
+            line-height: 1.3;
+        }
+
+        .file-title-row .album {
+            color: #999;
+            font-size: 12px;
+            font-weight: normal;
+        }
+
+        .file-content-row {
+            display: flex;
             align-items: center;
         }
 
@@ -833,23 +1070,146 @@ function updateMp3Metadata($filepath, $metadata, $sourceUrl = '') {
             font-size: 11px;
         }
 
+        .file-duration {
+            color: #667eea;
+            font-size: 11px;
+            font-weight: 500;
+        }
+
+        .waveform-player {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-top: 10px;
+            padding: 10px;
+            background: #f8f9fa;
+            border-radius: 8px;
+        }
+
+        .waveform-play-btn {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 16px;
+            flex-shrink: 0;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+
+        .waveform-play-btn:hover {
+            transform: scale(1.1);
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+        }
+
+        .waveform-container {
+            flex: 1;
+            height: 60px;
+            position: relative;
+            cursor: pointer;
+            border-radius: 4px;
+            overflow: hidden;
+            background: #e0e0e0;
+        }
+
+        .waveform-image {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+
+        .waveform-progress {
+            position: absolute;
+            top: 0;
+            left: 0;
+            height: 100%;
+            background: rgba(102, 126, 234, 0.3);
+            pointer-events: none;
+            width: 0%;
+            transition: width 0.1s linear;
+        }
+
+        .waveform-time {
+            font-size: 11px;
+            color: #666;
+            min-width: 80px;
+            text-align: right;
+            flex-shrink: 0;
+        }
+
         .file-actions {
             display: flex;
             gap: 8px;
             align-items: center;
+            flex-wrap: wrap;
+        }
+
+        .file-actions-row {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            align-items: flex-start;
+        }
+
+        /* Tooltip styling for all action buttons */
+        .file-actions [title] {
+            position: relative;
+        }
+
+        .file-actions [title]:hover::after {
+            content: attr(title);
+            position: absolute;
+            bottom: 100%;
+            left: 50%;
+            transform: translateX(-50%);
+            background: #333;
+            color: white;
+            padding: 6px 10px;
+            border-radius: 4px;
+            font-size: 14px;
+            font-weight: 500;
+            white-space: nowrap;
+            z-index: 100;
+            margin-bottom: 5px;
+        }
+
+        .file-actions [title]:hover::before {
+            content: '';
+            position: absolute;
+            bottom: 100%;
+            left: 50%;
+            transform: translateX(-50%);
+            border: 6px solid transparent;
+            border-top-color: #333;
+            z-index: 100;
+            margin-bottom: -7px;
         }
 
         .download-btn {
             background: white;
             color: black;
-            padding: 8px 15px;
+            padding: 6px 12px;
             border-radius: 6px;
             text-decoration: none;
-            font-size: 14px;
+            font-size: 13px;
             font-weight: 600;
             white-space: nowrap;
             transition: all 0.2s;
             border: 2px solid #667eea;
+            height: 34px;
+            display: inline-flex;
+            align-items: center;
+            box-sizing: border-box;
+        }
+
+        .download-box.not-downloaded .download-btn {
+            background: #a5d6a7;
+            border-color: #4caf50;
         }
 
         .download-btn:hover {
@@ -857,16 +1217,33 @@ function updateMp3Metadata($filepath, $metadata, $sourceUrl = '') {
             transform: scale(1.05);
         }
 
+        .download-box.not-downloaded .download-btn:hover {
+            background: #81c784;
+        }
+
+        .download-date {
+            font-size: 11px;
+            color: #666;
+            white-space: nowrap;
+            text-align: left;
+        }
+
         .delete-btn {
             background: white;
             color: black;
-            padding: 8px 12px;
+            width: 34px;
+            height: 34px;
+            padding: 0;
             border-radius: 6px;
             text-decoration: none;
-            font-size: 20px;
+            font-size: 16px;
             transition: all 0.2s;
             cursor: pointer;
             border: 2px solid #dc3545;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
         }
 
         .delete-btn:hover {
@@ -891,13 +1268,19 @@ function updateMp3Metadata($filepath, $metadata, $sourceUrl = '') {
         .play-btn {
             background: white;
             color: black;
-            padding: 8px 12px;
+            width: 34px;
+            height: 34px;
+            padding: 0;
             border-radius: 6px;
             text-decoration: none;
-            font-size: 20px;
+            font-size: 16px;
             transition: all 0.2s;
             cursor: pointer;
             border: 2px solid #28a745;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
         }
 
         .play-btn:hover {
@@ -908,13 +1291,24 @@ function updateMp3Metadata($filepath, $metadata, $sourceUrl = '') {
         .youtube-btn {
             background: white;
             color: black;
-            padding: 8px 12px;
+            width: 34px;
+            height: 34px;
+            padding: 0;
             border-radius: 6px;
             text-decoration: none;
-            font-size: 20px;
+            font-size: 16px;
             transition: all 0.2s;
             cursor: pointer;
             border: 2px solid #ff0000;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+        }
+
+        .youtube-btn svg {
+            width: 18px;
+            height: 12px;
         }
 
         .youtube-btn:hover {
@@ -925,18 +1319,65 @@ function updateMp3Metadata($filepath, $metadata, $sourceUrl = '') {
         .edit-btn {
             background: white;
             color: black;
-            padding: 8px 12px;
+            width: 34px;
+            height: 34px;
+            padding: 0;
             border-radius: 6px;
             text-decoration: none;
-            font-size: 20px;
+            font-size: 16px;
             transition: all 0.2s;
             cursor: pointer;
             border: 2px solid #666;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
         }
 
         .edit-btn:hover {
             background: #f8f8f8;
             transform: scale(1.1);
+        }
+
+        .normalize-btn {
+            background: white;
+            color: black;
+            width: 34px;
+            height: 34px;
+            padding: 0;
+            border-radius: 6px;
+            text-decoration: none;
+            font-size: 16px;
+            transition: all 0.2s;
+            cursor: pointer;
+            border: 2px solid #666;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+        }
+
+        .normalize-btn:hover {
+            background: #f8f8f8;
+            transform: scale(1.1);
+        }
+
+        .normalize-btn.recommended {
+            background: #a5d6a7;
+            border-color: #4caf50;
+        }
+
+        .normalize-btn.recommended:hover {
+            background: #81c784;
+        }
+
+        .normalize-btn.restore {
+            background: #fff3e0;
+            border-color: #ff9800;
+        }
+
+        .normalize-btn.restore:hover {
+            background: #ffe0b2;
         }
 
         .audio-player {
@@ -1245,95 +1686,129 @@ function updateMp3Metadata($filepath, $metadata, $sourceUrl = '') {
                         <?php foreach ($availableFiles as $file): ?>
                             <div class="file-item">
                                 <div class="file-item-main">
-                                    <?php
-                                        // Use YouTube thumbnail (most reliable)
-                                        $thumbnailUrl = getYouTubeThumbnail($file['original_url']);
-                                    ?>
-                                    <?php if (!empty($thumbnailUrl)): ?>
-                                        <img src="<?php echo htmlspecialchars($thumbnailUrl); ?>"
-                                             alt="<?php echo htmlspecialchars($file['artist'] . ' - ' . $file['title']); ?>"
-                                             class="file-thumbnail"
-                                             onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%22108%22 height=%22108%22%3E%3Crect fill=%22%23e0e0e0%22 width=%22108%22 height=%22108%22/%3E%3Ctext x=%2254%22 y=%2254%22 text-anchor=%22middle%22 dominant-baseline=%22middle%22 font-family=%22Arial%22 font-size=%2240%22 fill=%22%23999%22%3E%F0%9F%8E%B5%3C/text%3E%3C/svg%3E'; this.onerror=null;">
-                                    <?php else: ?>
-                                        <div class="file-thumbnail" style="display: flex; align-items: center; justify-content: center; font-size: 40px;">🎵</div>
-                                    <?php endif; ?>
-                                    <div class="file-info">
-                                        <?php if (!empty($file['video_title'])): ?>
-                                            <div style="font-size: 11px; color: #999; margin-bottom: 3px;">
-                                                Original: <?php echo htmlspecialchars($file['video_title']); ?>
-                                            </div>
-                                        <?php endif; ?>
-
+                                    <!-- Title Row (full width) -->
+                                    <div class="file-title-row">
                                         <?php if (!empty($file['artist']) && !empty($file['title'])): ?>
-                                            <div class="file-name">
-                                                <strong><?php echo htmlspecialchars($file['artist']); ?></strong> - <?php echo htmlspecialchars($file['title']); ?>
-                                                <?php if (!empty($file['album'])): ?>
-                                                    <span style="color: #999; font-size: 11px;">(<?php echo htmlspecialchars($file['album']); ?>)</span>
-                                                <?php endif; ?>
-                                            </div>
-                                            <div class="file-size" style="font-size: 10px; color: #999;">File: <?php echo htmlspecialchars($file['name']); ?></div>
+                                            <strong><?php echo htmlspecialchars($file['artist']); ?></strong> - <?php echo htmlspecialchars($file['title']); ?>
+                                            <?php if (!empty($file['album'])): ?>
+                                                <span class="album">(<?php echo htmlspecialchars($file['album']); ?>)</span>
+                                            <?php endif; ?>
                                         <?php else: ?>
-                                            <div class="file-name"><?php echo htmlspecialchars($file['name']); ?></div>
+                                            <?php echo htmlspecialchars($file['name']); ?>
                                         <?php endif; ?>
-                                        <div class="file-size"><?php echo formatFileSize($file['size']); ?> • Downloaded <?php echo formatTimeAgo($file['downloaded_at']); ?></div>
                                     </div>
-                                    <div class="file-actions">
-                                    <button class="play-btn"
-                                            onclick="playAudio('<?php echo htmlspecialchars($file['url'], ENT_QUOTES); ?>', '<?php echo htmlspecialchars($file['name'], ENT_QUOTES); ?>')"
-                                            title="Play audio">
-                                        ▶️
-                                    </button>
-                                    <?php if (!empty($file['original_url'])): ?>
-                                        <a href="<?php echo htmlspecialchars($file['original_url']); ?>"
-                                           class="youtube-btn"
-                                           target="_blank"
-                                           title="View original video">
-                                            ▶
-                                        </a>
-                                    <?php endif; ?>
-                                    <?php if (!empty($file['lyrics_url'])): ?>
-                                        <a href="<?php echo htmlspecialchars($file['lyrics_url']); ?>"
-                                           class="edit-btn"
-                                           target="_blank"
-                                           title="View lyrics">
-                                            📝
-                                        </a>
-                                    <?php endif; ?>
-                                    <?php if (!empty($file['artist']) || !empty($file['title'])): ?>
-                                        <button class="edit-btn"
-                                                onclick="editMetadata('<?php echo htmlspecialchars($file['name'], ENT_QUOTES); ?>', '<?php echo htmlspecialchars($file['artist'], ENT_QUOTES); ?>', '<?php echo htmlspecialchars($file['title'], ENT_QUOTES); ?>', '<?php echo htmlspecialchars($file['album'], ENT_QUOTES); ?>')"
-                                                title="Edit metadata">
-                                            🏷️
-                                        </button>
-                                    <?php endif; ?>
-                                    <?php if (!empty($file['video_title'])): ?>
-                                        <button class="edit-btn"
-                                                onclick="restoreOriginalTitle('<?php echo htmlspecialchars($file['name'], ENT_QUOTES); ?>', '<?php echo htmlspecialchars($file['video_title'], ENT_QUOTES); ?>')"
-                                                title="Restore original title">
-                                            ↩️
-                                        </button>
-                                    <?php endif; ?>
-                                    <button class="edit-btn"
-                                            onclick="editFilename('<?php echo htmlspecialchars($file['name'], ENT_QUOTES); ?>')"
-                                            title="Rename file">
-                                        ✏️
-                                    </button>
-                                    <button class="edit-btn"
-                                            onclick="trimAudio('<?php echo htmlspecialchars($file['name'], ENT_QUOTES); ?>', '<?php echo htmlspecialchars($file['url'], ENT_QUOTES); ?>')"
-                                            title="Trim audio">
-                                        ✂️
-                                    </button>
-                                    <a href="<?php echo htmlspecialchars($file['url']); ?>" class="download-btn" download>
-                                        📥 Download
-                                    </a>
-                                    <a href="?delete=<?php echo urlencode($file['name']); ?>"
-                                       class="delete-btn"
-                                       onclick="return confirm('Delete this file?');"
-                                       title="Delete file">
-                                        🗑️
-                                    </a>
-                                </div>
+
+                                    <!-- Content Row (thumbnail + info + buttons) -->
+                                    <div class="file-content-row">
+                                        <?php
+                                            // Use YouTube thumbnail (most reliable)
+                                            $thumbnailUrl = getYouTubeThumbnail($file['original_url']);
+                                        ?>
+                                        <?php if (!empty($thumbnailUrl)): ?>
+                                            <img src="<?php echo htmlspecialchars($thumbnailUrl); ?>"
+                                                 alt="<?php echo htmlspecialchars($file['artist'] . ' - ' . $file['title']); ?>"
+                                                 class="file-thumbnail"
+                                                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%22108%22 height=%22108%22%3E%3Crect fill=%22%23e0e0e0%22 width=%22108%22 height=%22108%22/%3E%3Ctext x=%2254%22 y=%2254%22 text-anchor=%22middle%22 dominant-baseline=%22middle%22 font-family=%22Arial%22 font-size=%2240%22 fill=%22%23999%22%3E%F0%9F%8E%B5%3C/text%3E%3C/svg%3E'; this.onerror=null;">
+                                        <?php else: ?>
+                                            <div class="file-thumbnail" style="display: flex; align-items: center; justify-content: center; font-size: 40px;">🎵</div>
+                                        <?php endif; ?>
+                                        <div class="file-info">
+                                            <?php if (!empty($file['video_title'])): ?>
+                                                <div style="font-size: 11px; color: #999; margin-bottom: 3px;">
+                                                    Original: <?php echo htmlspecialchars($file['video_title']); ?>
+                                                </div>
+                                            <?php endif; ?>
+                                            <?php if (!empty($file['artist']) && !empty($file['title'])): ?>
+                                                <div class="file-size" style="font-size: 10px; color: #999;">File: <?php echo htmlspecialchars($file['name']); ?></div>
+                                            <?php endif; ?>
+                                            <div class="file-size"><?php echo formatFileSize($file['size']); ?></div>
+                                            <?php if (!empty($file['duration'])): ?>
+                                                <div class="file-duration">Duration: <?php echo htmlspecialchars($file['duration']); ?></div>
+                                            <?php endif; ?>
+                                        </div>
+                                    <div class="file-actions-row">
+                                        <div class="file-actions">
+                                            <div class="download-box" data-filename="<?php echo htmlspecialchars($file['name'], ENT_QUOTES); ?>">
+                                                <a href="<?php echo htmlspecialchars($file['url']); ?>" class="download-btn" download onclick="markAsDownloaded('<?php echo htmlspecialchars($file['name'], ENT_QUOTES); ?>')" title="Download MP3">
+                                                    📥 Download
+                                                </a>
+                                            </div>
+                                            <?php if ($file['has_backup']): ?>
+                                            <button class="normalize-btn restore"
+                                                    onclick="restoreBackup('<?php echo htmlspecialchars($file['name'], ENT_QUOTES); ?>')"
+                                                    title="Restore original (undo normalize)">
+                                                ↩️
+                                            </button>
+                                            <?php else: ?>
+                                            <button class="normalize-btn<?php echo $file['needs_normalize'] ? ' recommended' : ''; ?>"
+                                                    onclick="normalizeAudio('<?php echo htmlspecialchars($file['name'], ENT_QUOTES); ?>')"
+                                                    title="Normalize volume<?php echo $file['needs_normalize'] ? ' (Recommended - peak: ' . round($file['peak_level'], 1) . 'dB)' : ' (Peak: ' . round($file['peak_level'], 1) . 'dB)'; ?>">
+                                                📊
+                                            </button>
+                                            <?php endif; ?>
+                                            <?php if (!empty($file['original_url'])): ?>
+                                                <a href="<?php echo htmlspecialchars($file['original_url']); ?>"
+                                                   class="youtube-btn"
+                                                   target="_blank"
+                                                   title="View original video">
+                                                    <svg viewBox="0 0 28 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                                        <rect width="28" height="20" rx="4" fill="#FF0000"/>
+                                                        <path d="M11 6.5V13.5L18 10L11 6.5Z" fill="white"/>
+                                                    </svg>
+                                                </a>
+                                            <?php endif; ?>
+                                            <?php if (!empty($file['lyrics_url'])): ?>
+                                                <a href="<?php echo htmlspecialchars($file['lyrics_url']); ?>"
+                                                   class="edit-btn"
+                                                   target="_blank"
+                                                   title="View lyrics">
+                                                    📝
+                                                </a>
+                                            <?php endif; ?>
+                                            <?php if (!empty($file['artist']) || !empty($file['title'])): ?>
+                                                <button class="edit-btn"
+                                                        onclick="editMetadata('<?php echo htmlspecialchars($file['name'], ENT_QUOTES); ?>', '<?php echo htmlspecialchars($file['artist'], ENT_QUOTES); ?>', '<?php echo htmlspecialchars($file['title'], ENT_QUOTES); ?>', '<?php echo htmlspecialchars($file['album'], ENT_QUOTES); ?>')"
+                                                        title="Edit metadata">
+                                                    🏷️
+                                                </button>
+                                            <?php endif; ?>
+                                            <button class="edit-btn"
+                                                    onclick="editFilename('<?php echo htmlspecialchars($file['name'], ENT_QUOTES); ?>')"
+                                                    title="Rename file">
+                                                ✏️
+                                            </button>
+                                            <button class="edit-btn"
+                                                    onclick="trimAudio('<?php echo htmlspecialchars($file['name'], ENT_QUOTES); ?>', '<?php echo htmlspecialchars($file['url'], ENT_QUOTES); ?>')"
+                                                    title="Trim audio">
+                                                ✂️
+                                            </button>
+                                            <a href="?delete=<?php echo urlencode($file['name']); ?>"
+                                               class="delete-btn"
+                                               onclick="return confirm('Delete this file?');"
+                                               title="Delete file">
+                                                🗑️
+                                            </a>
+                                        </div>
+                                        <div class="download-date" data-filename="<?php echo htmlspecialchars($file['name'], ENT_QUOTES); ?>"></div>
+                                    </div>
+                                    </div><!-- End file-content-row -->
                                 </div><!-- End file-item-main -->
+
+                                <!-- Waveform Player -->
+                                <div class="waveform-player" data-audio-url="<?php echo htmlspecialchars($file['url'], ENT_QUOTES); ?>" data-duration="<?php echo $file['duration_seconds']; ?>">
+                                    <button class="waveform-play-btn" onclick="toggleWaveformPlay(this)" title="Play/Pause">
+                                        ▶
+                                    </button>
+                                    <div class="waveform-container" onclick="seekWaveform(event, this)">
+                                        <?php if (!empty($file['waveform_url'])): ?>
+                                            <img src="<?php echo htmlspecialchars($file['waveform_url']); ?>" class="waveform-image" alt="Waveform">
+                                        <?php endif; ?>
+                                        <div class="waveform-progress"></div>
+                                    </div>
+                                    <div class="waveform-time">
+                                        <span class="current-time">0:00:00</span> / <span class="total-time"><?php echo htmlspecialchars($file['duration']); ?></span>
+                                    </div>
+                                </div>
 
                                 <?php if (!empty($file['summary'])): ?>
                                     <div class="file-summary">
@@ -1349,6 +1824,76 @@ function updateMp3Metadata($filepath, $metadata, $sourceUrl = '') {
     </div>
 
     <script>
+        // Track downloaded files in localStorage with timestamps
+        function getDownloadedFiles() {
+            const stored = localStorage.getItem('downloadedFilesV2');
+            return stored ? JSON.parse(stored) : {};
+        }
+
+        function markAsDownloaded(filename) {
+            const downloaded = getDownloadedFiles();
+            downloaded[filename] = Date.now();
+            localStorage.setItem('downloadedFilesV2', JSON.stringify(downloaded));
+
+            // Remove the not-downloaded class and update the date display
+            const downloadBox = document.querySelector(`.download-box[data-filename="${CSS.escape(filename)}"]`);
+            if (downloadBox) {
+                downloadBox.classList.remove('not-downloaded');
+            }
+            const dateEl = document.querySelector(`.download-date[data-filename="${CSS.escape(filename)}"]`);
+            if (dateEl) {
+                dateEl.textContent = 'Last downloaded: Just now';
+            }
+        }
+
+        function formatTimeAgo(timestamp) {
+            const diff = Math.floor((Date.now() - timestamp) / 1000);
+
+            if (diff < 60) return 'Just now';
+            if (diff < 3600) {
+                const mins = Math.floor(diff / 60);
+                return mins + ' min' + (mins > 1 ? 's' : '') + ' ago';
+            }
+            if (diff < 86400) {
+                const hours = Math.floor(diff / 3600);
+                return hours + ' hour' + (hours > 1 ? 's' : '') + ' ago';
+            }
+            if (diff < 604800) {
+                const days = Math.floor(diff / 86400);
+                return days + ' day' + (days > 1 ? 's' : '') + ' ago';
+            }
+
+            const date = new Date(timestamp);
+            const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+            const hours = date.getHours();
+            const ampm = hours >= 12 ? 'pm' : 'am';
+            const hour12 = hours % 12 || 12;
+            const minutes = date.getMinutes().toString().padStart(2, '0');
+            return `${months[date.getMonth()]} ${date.getDate()}, ${date.getFullYear()} ${hour12}:${minutes} ${ampm}`;
+        }
+
+        function highlightUndownloadedFiles() {
+            const downloaded = getDownloadedFiles();
+            const downloadBoxes = document.querySelectorAll('.download-box');
+            downloadBoxes.forEach(box => {
+                const filename = box.getAttribute('data-filename');
+                const dateEl = document.querySelector(`.download-date[data-filename="${CSS.escape(filename)}"]`);
+
+                if (downloaded[filename]) {
+                    // File has been downloaded - show when
+                    if (dateEl) {
+                        dateEl.textContent = 'Last downloaded: ' + formatTimeAgo(downloaded[filename]);
+                    }
+                } else {
+                    // File not downloaded yet - highlight it
+                    box.classList.add('not-downloaded');
+                    if (dateEl) {
+                        dateEl.textContent = 'Not yet downloaded';
+                    }
+                }
+            });
+        }
+
         // Allow Enter key to submit the form
         document.addEventListener('DOMContentLoaded', function() {
             const urlInput = document.getElementById('url');
@@ -1360,7 +1905,123 @@ function updateMp3Metadata($filepath, $metadata, $sourceUrl = '') {
                     }
                 });
             }
+
+            // Highlight files that haven't been downloaded yet
+            highlightUndownloadedFiles();
         });
+
+        // Waveform player functionality
+        let currentWaveformPlayer = null;
+        let waveformAudio = new Audio();
+        let waveformUpdateInterval = null;
+
+        function formatDuration(seconds) {
+            const mins = Math.floor(seconds / 60);
+            const secs = Math.floor(seconds % 60);
+            const hundredths = Math.floor((seconds - Math.floor(seconds)) * 100);
+            return `${mins}:${secs.toString().padStart(2, '0')}:${hundredths.toString().padStart(2, '0')}`;
+        }
+
+        function updateWaveformProgress() {
+            if (!currentWaveformPlayer) return;
+
+            const progress = currentWaveformPlayer.querySelector('.waveform-progress');
+            const currentTimeEl = currentWaveformPlayer.querySelector('.current-time');
+            const duration = parseFloat(currentWaveformPlayer.dataset.duration) || waveformAudio.duration;
+
+            if (duration > 0) {
+                const percent = (waveformAudio.currentTime / duration) * 100;
+                progress.style.width = percent + '%';
+                currentTimeEl.textContent = formatDuration(waveformAudio.currentTime);
+            }
+        }
+
+        function toggleWaveformPlay(button) {
+            const player = button.closest('.waveform-player');
+            const audioUrl = player.dataset.audioUrl;
+
+            // If clicking a different player, stop the current one
+            if (currentWaveformPlayer && currentWaveformPlayer !== player) {
+                stopWaveformPlayer();
+            }
+
+            if (waveformAudio.src !== audioUrl || waveformAudio.src === '') {
+                // Load new audio
+                waveformAudio.src = audioUrl;
+                waveformAudio.load();
+            }
+
+            if (waveformAudio.paused) {
+                // Play
+                currentWaveformPlayer = player;
+                waveformAudio.play();
+                button.textContent = '⏸';
+
+                // Start progress updates
+                waveformUpdateInterval = setInterval(updateWaveformProgress, 50);
+
+                // Handle audio end
+                waveformAudio.onended = function() {
+                    stopWaveformPlayer();
+                };
+            } else {
+                // Pause
+                waveformAudio.pause();
+                button.textContent = '▶';
+                clearInterval(waveformUpdateInterval);
+            }
+        }
+
+        function stopWaveformPlayer() {
+            if (currentWaveformPlayer) {
+                const button = currentWaveformPlayer.querySelector('.waveform-play-btn');
+                const progress = currentWaveformPlayer.querySelector('.waveform-progress');
+                const currentTimeEl = currentWaveformPlayer.querySelector('.current-time');
+
+                button.textContent = '▶';
+                progress.style.width = '0%';
+                currentTimeEl.textContent = '0:00:00';
+            }
+
+            waveformAudio.pause();
+            waveformAudio.currentTime = 0;
+            clearInterval(waveformUpdateInterval);
+            currentWaveformPlayer = null;
+        }
+
+        function seekWaveform(event, container) {
+            const player = container.closest('.waveform-player');
+            const rect = container.getBoundingClientRect();
+            const clickX = event.clientX - rect.left;
+            const percent = clickX / rect.width;
+            const duration = parseFloat(player.dataset.duration) || waveformAudio.duration;
+
+            // If this is a different player, switch to it
+            if (currentWaveformPlayer !== player) {
+                if (currentWaveformPlayer) {
+                    stopWaveformPlayer();
+                }
+                currentWaveformPlayer = player;
+                waveformAudio.src = player.dataset.audioUrl;
+                waveformAudio.load();
+            }
+
+            waveformAudio.currentTime = percent * duration;
+
+            // Start playing if not already
+            if (waveformAudio.paused) {
+                const button = player.querySelector('.waveform-play-btn');
+                waveformAudio.play();
+                button.textContent = '⏸';
+                waveformUpdateInterval = setInterval(updateWaveformProgress, 50);
+
+                waveformAudio.onended = function() {
+                    stopWaveformPlayer();
+                };
+            }
+
+            updateWaveformProgress();
+        }
 
         function playAudio(url, filename) {
             const player = document.getElementById('audioPlayer');
@@ -1456,6 +2117,52 @@ function updateMp3Metadata($filepath, $metadata, $sourceUrl = '') {
             audioPlayer.pause();
             audioPlayer.src = '';
             modal.classList.remove('active');
+        }
+
+        function normalizeAudio(filename) {
+            if (confirm('Normalize this audio file? This will:\n\n• Trim silence from the beginning and end\n• Balance volume levels throughout\n• Make quiet audio louder\n\nYou can restore the original later if needed.')) {
+                const form = document.createElement('form');
+                form.method = 'POST';
+                form.action = '';
+
+                const normalizeInput = document.createElement('input');
+                normalizeInput.type = 'hidden';
+                normalizeInput.name = 'normalize_audio';
+                normalizeInput.value = '1';
+                form.appendChild(normalizeInput);
+
+                const filenameInput = document.createElement('input');
+                filenameInput.type = 'hidden';
+                filenameInput.name = 'filename';
+                filenameInput.value = filename;
+                form.appendChild(filenameInput);
+
+                document.body.appendChild(form);
+                form.submit();
+            }
+        }
+
+        function restoreBackup(filename) {
+            if (confirm('Restore the original audio file? This will undo the normalization.')) {
+                const form = document.createElement('form');
+                form.method = 'POST';
+                form.action = '';
+
+                const restoreInput = document.createElement('input');
+                restoreInput.type = 'hidden';
+                restoreInput.name = 'restore_backup';
+                restoreInput.value = '1';
+                form.appendChild(restoreInput);
+
+                const filenameInput = document.createElement('input');
+                filenameInput.type = 'hidden';
+                filenameInput.name = 'filename';
+                filenameInput.value = filename;
+                form.appendChild(filenameInput);
+
+                document.body.appendChild(form);
+                form.submit();
+            }
         }
 
         function restoreOriginalTitle(filename, originalTitle) {
