@@ -55,12 +55,68 @@ function getAvailableFiles() {
     return $files;
 }
 
+$ffmpegPath = '/home/harry/bin/ffmpeg';
+
 // Handle AJAX actions
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     header('Content-Type: application/json');
     $playlists = loadPlaylists();
 
     switch ($_POST['action']) {
+        case 'save_recording':
+            $name = trim($_POST['name'] ?? '');
+            if (empty($name)) {
+                echo json_encode(['success' => false, 'error' => 'Name required']);
+                exit;
+            }
+
+            if (!isset($_FILES['audio']) || $_FILES['audio']['error'] !== UPLOAD_ERR_OK) {
+                echo json_encode(['success' => false, 'error' => 'No audio file received']);
+                exit;
+            }
+
+            // Clean filename
+            $safeName = preg_replace('/[^a-zA-Z0-9_\-\s]/', '', $name);
+            $safeName = trim($safeName);
+            if (empty($safeName)) $safeName = 'Recording_' . time();
+
+            $outputFilename = $safeName . '.mp3';
+            $outputPath = $downloadsDir . '/' . $outputFilename;
+
+            // Ensure unique filename
+            $counter = 1;
+            while (file_exists($outputPath)) {
+                $outputFilename = $safeName . '_' . $counter . '.mp3';
+                $outputPath = $downloadsDir . '/' . $outputFilename;
+                $counter++;
+            }
+
+            $tempWebm = $_FILES['audio']['tmp_name'];
+
+            // Convert webm to mp3 using ffmpeg
+            $cmd = escapeshellcmd($ffmpegPath) . ' -i ' . escapeshellarg($tempWebm) .
+                   ' -vn -ar 44100 -ac 1 -b:a 128k ' .
+                   escapeshellarg($outputPath) . ' 2>&1';
+
+            exec($cmd, $output, $returnCode);
+
+            if ($returnCode !== 0 || !file_exists($outputPath)) {
+                echo json_encode(['success' => false, 'error' => 'Conversion failed: ' . implode("\n", $output)]);
+                exit;
+            }
+
+            // Create meta file
+            $meta = [
+                'artist' => 'Voice Recording',
+                'title' => $name,
+                'album' => '',
+                'summary' => 'Voice recording created in WombatPlaylist',
+                'recorded' => date('Y-m-d H:i:s')
+            ];
+            file_put_contents($outputPath . '.meta', json_encode($meta, JSON_PRETTY_PRINT));
+
+            echo json_encode(['success' => true, 'filename' => $outputFilename]);
+            exit;
         case 'create_playlist':
             $name = trim($_POST['name'] ?? '');
             if (empty($name)) {
@@ -633,6 +689,7 @@ $availableFiles = getAvailableFiles();
             <nav class="nav-tabs">
                 <a href="index.php">MP3 Converter</a>
                 <a href="wombat-playlist.php" class="active">Playlists</a>
+                <a href="#" onclick="toggleRecorder(); return false;">Record Intro</a>
             </nav>
         </header>
 
@@ -657,6 +714,7 @@ $availableFiles = getAvailableFiles();
                                     <?= count($playlist['tracks']) ?> tracks
                                 </div>
                                 <div class="playlist-actions">
+                                    <button class="btn btn-small btn-success" onclick="event.stopPropagation(); playPlaylist('<?= htmlspecialchars($playlist['id']) ?>')">▶ Play</button>
                                     <a href="?export=m3u&id=<?= htmlspecialchars($playlist['id']) ?>" class="btn btn-small btn-outline" onclick="event.stopPropagation()">Export</a>
                                     <button class="btn btn-small btn-danger" onclick="event.stopPropagation(); deletePlaylist('<?= htmlspecialchars($playlist['id']) ?>')">Delete</button>
                                 </div>
@@ -737,6 +795,46 @@ $availableFiles = getAvailableFiles();
             <div class="modal-actions">
                 <button class="btn btn-outline" onclick="hideCreateModal()">Cancel</button>
                 <button class="btn btn-primary" onclick="createPlaylist()">Create</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Recorder Modal -->
+    <div class="modal" id="recorderModal">
+        <div class="modal-content" style="width: 500px;">
+            <h3>🎙️ Record Song Introduction</h3>
+            <p style="color: #888; margin-bottom: 20px; font-size: 14px;">Record a voice introduction for your playlist tracks</p>
+
+            <input type="text" id="recordingName" placeholder="Recording name (e.g., 'Intro - My Favorite Song')" required>
+
+            <div id="recorderUI" style="text-align: center; padding: 20px;">
+                <div id="recordingStatus" style="margin-bottom: 15px; font-size: 14px; color: #888;">
+                    Click the button to start recording
+                </div>
+
+                <div id="recordingTimer" style="font-size: 36px; font-weight: bold; margin-bottom: 20px; color: #667eea; display: none;">
+                    0:00
+                </div>
+
+                <div id="recordingWaveform" style="height: 60px; background: rgba(255,255,255,0.05); border-radius: 8px; margin-bottom: 20px; display: none; overflow: hidden;">
+                    <canvas id="waveformCanvas" style="width: 100%; height: 100%;"></canvas>
+                </div>
+
+                <button id="recordBtn" class="btn btn-primary" style="width: 80px; height: 80px; border-radius: 50%; font-size: 24px;" onclick="toggleRecording()">
+                    🎤
+                </button>
+
+                <div id="recordingControls" style="margin-top: 20px; display: none;">
+                    <audio id="recordingPreview" controls style="width: 100%; margin-bottom: 15px;"></audio>
+                    <div style="display: flex; gap: 10px; justify-content: center;">
+                        <button class="btn btn-outline" onclick="discardRecording()">Discard</button>
+                        <button class="btn btn-success" onclick="saveRecording()">Save to Library</button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="modal-actions" style="margin-top: 20px;">
+                <button class="btn btn-outline" onclick="hideRecorderModal()">Close</button>
             </div>
         </div>
     </div>
@@ -1003,6 +1101,20 @@ $availableFiles = getAvailableFiles();
             });
         }
 
+        function playPlaylist(id) {
+            // Select and load the playlist, then start playing from track 0
+            selectPlaylist(id);
+
+            // Wait for playlist to load, then start playback
+            setTimeout(() => {
+                if (currentPlaylist && currentPlaylist.tracks.length > 0) {
+                    playTrack(0);
+                } else {
+                    alert('This playlist has no tracks');
+                }
+            }, 300);
+        }
+
         function escapeHtml(text) {
             const div = document.createElement('div');
             div.textContent = text;
@@ -1022,6 +1134,230 @@ $availableFiles = getAvailableFiles();
                 e.preventDefault();
                 togglePlayPause();
             }
+        });
+
+        // ====== RECORDER FUNCTIONALITY ======
+        let mediaRecorder = null;
+        let audioChunks = [];
+        let recordingBlob = null;
+        let isRecording = false;
+        let recordingStartTime = null;
+        let timerInterval = null;
+        let audioContext = null;
+        let analyser = null;
+        let animationFrame = null;
+
+        function toggleRecorder() {
+            document.getElementById('recorderModal').classList.add('active');
+            document.getElementById('recordingName').focus();
+        }
+
+        function hideRecorderModal() {
+            document.getElementById('recorderModal').classList.remove('active');
+            if (isRecording) {
+                stopRecording();
+            }
+            resetRecorder();
+        }
+
+        function resetRecorder() {
+            document.getElementById('recordingName').value = '';
+            document.getElementById('recordingStatus').textContent = 'Click the button to start recording';
+            document.getElementById('recordingTimer').style.display = 'none';
+            document.getElementById('recordingWaveform').style.display = 'none';
+            document.getElementById('recordingControls').style.display = 'none';
+            document.getElementById('recordBtn').textContent = '🎤';
+            document.getElementById('recordBtn').style.background = 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)';
+            audioChunks = [];
+            recordingBlob = null;
+        }
+
+        async function toggleRecording() {
+            if (!isRecording) {
+                await startRecording();
+            } else {
+                stopRecording();
+            }
+        }
+
+        async function startRecording() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+
+                // Set up audio context for visualization
+                audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                analyser = audioContext.createAnalyser();
+                const source = audioContext.createMediaStreamSource(stream);
+                source.connect(analyser);
+                analyser.fftSize = 256;
+
+                // Set up media recorder
+                mediaRecorder = new MediaRecorder(stream);
+                audioChunks = [];
+
+                mediaRecorder.ondataavailable = (e) => {
+                    audioChunks.push(e.data);
+                };
+
+                mediaRecorder.onstop = () => {
+                    recordingBlob = new Blob(audioChunks, { type: 'audio/webm' });
+                    const audioUrl = URL.createObjectURL(recordingBlob);
+                    document.getElementById('recordingPreview').src = audioUrl;
+                    document.getElementById('recordingControls').style.display = 'block';
+                    document.getElementById('recordingStatus').textContent = 'Recording complete! Preview and save.';
+
+                    // Stop all tracks
+                    stream.getTracks().forEach(track => track.stop());
+                };
+
+                mediaRecorder.start();
+                isRecording = true;
+                recordingStartTime = Date.now();
+
+                // Update UI
+                document.getElementById('recordBtn').textContent = '⏹';
+                document.getElementById('recordBtn').style.background = '#dc3545';
+                document.getElementById('recordingStatus').textContent = 'Recording... Click to stop';
+                document.getElementById('recordingTimer').style.display = 'block';
+                document.getElementById('recordingWaveform').style.display = 'block';
+
+                // Start timer
+                timerInterval = setInterval(updateTimer, 100);
+
+                // Start visualization
+                drawWaveform();
+
+            } catch (err) {
+                console.error('Error accessing microphone:', err);
+                alert('Could not access microphone. Please ensure you have granted permission.');
+            }
+        }
+
+        function stopRecording() {
+            if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+                mediaRecorder.stop();
+            }
+            isRecording = false;
+
+            // Stop timer
+            if (timerInterval) {
+                clearInterval(timerInterval);
+                timerInterval = null;
+            }
+
+            // Stop visualization
+            if (animationFrame) {
+                cancelAnimationFrame(animationFrame);
+                animationFrame = null;
+            }
+
+            // Close audio context
+            if (audioContext) {
+                audioContext.close();
+                audioContext = null;
+            }
+
+            document.getElementById('recordBtn').textContent = '🎤';
+            document.getElementById('recordBtn').style.background = 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)';
+        }
+
+        function updateTimer() {
+            const elapsed = Date.now() - recordingStartTime;
+            const seconds = Math.floor(elapsed / 1000);
+            const mins = Math.floor(seconds / 60);
+            const secs = seconds % 60;
+            document.getElementById('recordingTimer').textContent = mins + ':' + String(secs).padStart(2, '0');
+        }
+
+        function drawWaveform() {
+            if (!analyser) return;
+
+            const canvas = document.getElementById('waveformCanvas');
+            const ctx = canvas.getContext('2d');
+            const bufferLength = analyser.frequencyBinCount;
+            const dataArray = new Uint8Array(bufferLength);
+
+            canvas.width = canvas.offsetWidth;
+            canvas.height = canvas.offsetHeight;
+
+            function draw() {
+                if (!isRecording) return;
+
+                animationFrame = requestAnimationFrame(draw);
+                analyser.getByteFrequencyData(dataArray);
+
+                ctx.fillStyle = 'rgba(26, 26, 46, 0.3)';
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+                const barWidth = (canvas.width / bufferLength) * 2.5;
+                let x = 0;
+
+                for (let i = 0; i < bufferLength; i++) {
+                    const barHeight = (dataArray[i] / 255) * canvas.height;
+
+                    const gradient = ctx.createLinearGradient(0, canvas.height, 0, canvas.height - barHeight);
+                    gradient.addColorStop(0, '#667eea');
+                    gradient.addColorStop(1, '#764ba2');
+
+                    ctx.fillStyle = gradient;
+                    ctx.fillRect(x, canvas.height - barHeight, barWidth, barHeight);
+
+                    x += barWidth + 1;
+                }
+            }
+
+            draw();
+        }
+
+        function discardRecording() {
+            resetRecorder();
+            document.getElementById('recordingStatus').textContent = 'Click the button to start recording';
+        }
+
+        async function saveRecording() {
+            const name = document.getElementById('recordingName').value.trim();
+            if (!name) {
+                alert('Please enter a name for the recording');
+                return;
+            }
+
+            if (!recordingBlob) {
+                alert('No recording to save');
+                return;
+            }
+
+            // Convert to FormData and send to server
+            const formData = new FormData();
+            formData.append('action', 'save_recording');
+            formData.append('name', name);
+            formData.append('audio', recordingBlob, 'recording.webm');
+
+            try {
+                document.getElementById('recordingStatus').textContent = 'Saving...';
+
+                const response = await fetch('wombat-playlist.php', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    alert('Recording saved as: ' + data.filename);
+                    hideRecorderModal();
+                    location.reload(); // Refresh to show new file
+                } else {
+                    alert('Error saving: ' + (data.error || 'Unknown error'));
+                }
+            } catch (err) {
+                console.error('Save error:', err);
+                alert('Error saving recording');
+            }
+        }
+
+        // Close recorder modal on backdrop click
+        document.getElementById('recorderModal').addEventListener('click', function(e) {
+            if (e.target === this) hideRecorderModal();
         });
     </script>
 </body>

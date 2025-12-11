@@ -1023,26 +1023,22 @@ function searchArchive($artist, $title) {
     $artistOnly = preg_replace('/\s+/', ' ', trim($artistOnly));
 
     foreach ($archiveIndex as $entry) {
-        $entryKey = $entry['search_key'] ?? '';
         $entryArtist = strtolower($entry['artist'] ?? '');
         $entryTitle = strtolower($entry['title'] ?? '');
 
-        // Exact match on search key
-        if ($searchKey === trim($entryKey)) {
-            return $entry;
+        if (empty($entryArtist) || empty($entryTitle)) {
+            continue;
         }
 
-        // Match on artist and title separately
-        if (!empty($entryArtist) && !empty($entryTitle)) {
-            $entryArtistClean = preg_replace('/[^a-z0-9\s]/', '', $entryArtist);
-            $entryTitleClean = preg_replace('/[^a-z0-9\s]/', '', $entryTitle);
+        // Clean entry values for comparison
+        $entryArtistClean = preg_replace('/[^a-z0-9\s]/', '', $entryArtist);
+        $entryArtistClean = preg_replace('/\s+/', ' ', trim($entryArtistClean));
+        $entryTitleClean = preg_replace('/[^a-z0-9\s]/', '', $entryTitle);
+        $entryTitleClean = preg_replace('/\s+/', ' ', trim($entryTitleClean));
 
-            // Check if artist and title both match
-            if (strpos($entryArtistClean, $artistOnly) !== false || strpos($artistOnly, $entryArtistClean) !== false) {
-                if (strpos($entryTitleClean, $titleOnly) !== false || strpos($titleOnly, $entryTitleClean) !== false) {
-                    return $entry;
-                }
-            }
+        // Require EXACT match on both artist AND title
+        if ($artistOnly === $entryArtistClean && $titleOnly === $entryTitleClean) {
+            return $entry;
         }
     }
 

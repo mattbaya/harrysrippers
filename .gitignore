@@ -1,5 +1,8 @@
 .env
 downloads/*.mp3
 downloads/*.meta
+downloads/*.png
 rip_log.json
+playlists.json
+error_log
 *.mp3
