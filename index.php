@@ -39,7 +39,7 @@ $downloadsDir = __DIR__ . '/downloads';
 $downloadsUrl = '/harrysrippers/downloads';
 $ytDlpPath = '/home/harry/bin/yt-dlp';
 $ffmpegPath = '/home/harry/bin/ffmpeg';
-$maxFileAge = 864000; // Delete files older than 10 days
+$maxDisplayAge = 1209600; // Only show files from last 14 days in UI (don't delete)
 $logFile = __DIR__ . '/rip_log.json';
 $openaiApiKey = getenv('OPENAI_API_KEY');
 
@@ -509,22 +509,17 @@ if (isset($_POST['reprocess_all'])) {
     exit;
 }
 
-// Clean up old files
-$files = glob($downloadsDir . '/*.mp3');
-if ($files) {
-    foreach ($files as $file) {
-        if (is_file($file) && time() - filemtime($file) > $maxFileAge) {
-            unlink($file);
-        }
-    }
-}
-
-// Get available files for display
+// Get available files for display (only show files from last 14 days)
 $availableFiles = [];
 $files = glob($downloadsDir . '/*.mp3');
 if ($files) {
     foreach ($files as $file) {
         if (is_file($file)) {
+            // Skip files older than 14 days (they still exist, just not shown)
+            if (time() - filemtime($file) > $maxDisplayAge) {
+                continue;
+            }
+
             $basename = basename($file);
             $metaPath = $file . '.meta';
             $originalUrl = '';
