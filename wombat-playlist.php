@@ -300,6 +300,272 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             ]);
             exit;
 
+        case 'edit_normalize':
+            $filename = $_POST['filename'] ?? '';
+            $filePath = $downloadsDir . '/' . $filename;
+            if (!file_exists($filePath)) {
+                echo json_encode(['success' => false, 'error' => 'File not found']);
+                exit;
+            }
+
+            // Create backup
+            $backupDir = $downloadsDir . '/backups';
+            if (!is_dir($backupDir)) mkdir($backupDir, 0755, true);
+            $backupPath = $backupDir . '/' . $filename . '.backup';
+            if (!file_exists($backupPath)) {
+                copy($filePath, $backupPath);
+            }
+
+            // Get peak level
+            $peakCmd = escapeshellcmd($ffmpegPath) . ' -i ' . escapeshellarg($filePath) . ' -af "volumedetect" -f null - 2>&1';
+            $peakOutput = shell_exec($peakCmd);
+            preg_match('/max_volume: ([-\d.]+) dB/', $peakOutput, $matches);
+            $maxVol = floatval($matches[1] ?? 0);
+            $gainNeeded = min(-1 - $maxVol, 20);
+
+            $tempFile = sys_get_temp_dir() . '/norm_' . uniqid() . '.mp3';
+            $normCmd = escapeshellcmd($ffmpegPath) . ' -i ' . escapeshellarg($filePath) .
+                       ' -af "silenceremove=start_periods=1:start_silence=1.0:start_threshold=-50dB:stop_silence=1.0:detection=peak,areverse,silenceremove=start_periods=1:start_silence=1.0:start_threshold=-50dB:stop_silence=1.0:detection=peak,areverse,volume=' . $gainNeeded . 'dB,alimiter=limit=0.95:attack=5:release=50" -ar 44100 -ab 192k ' .
+                       escapeshellarg($tempFile) . ' 2>&1';
+            exec($normCmd, $output, $returnCode);
+
+            if ($returnCode === 0 && file_exists($tempFile)) {
+                unlink($filePath);
+                rename($tempFile, $filePath);
+                echo json_encode(['success' => true]);
+            } else {
+                echo json_encode(['success' => false, 'error' => 'Normalization failed']);
+            }
+            exit;
+
+        case 'edit_trim':
+            $filename = $_POST['filename'] ?? '';
+            $filePath = $downloadsDir . '/' . $filename;
+            if (!file_exists($filePath)) {
+                echo json_encode(['success' => false, 'error' => 'File not found']);
+                exit;
+            }
+
+            // Create backup
+            $backupDir = $downloadsDir . '/backups';
+            if (!is_dir($backupDir)) mkdir($backupDir, 0755, true);
+            $backupPath = $backupDir . '/' . $filename . '.backup';
+            if (!file_exists($backupPath)) {
+                copy($filePath, $backupPath);
+            }
+
+            $tempFile = sys_get_temp_dir() . '/trim_' . uniqid() . '.mp3';
+            $trimCmd = escapeshellcmd($ffmpegPath) . ' -i ' . escapeshellarg($filePath) .
+                       ' -af "silenceremove=start_periods=1:start_silence=1.0:start_threshold=-50dB:stop_silence=1.0:detection=peak,areverse,silenceremove=start_periods=1:start_silence=1.0:start_threshold=-50dB:stop_silence=1.0:detection=peak,areverse" -ar 44100 -ab 192k ' .
+                       escapeshellarg($tempFile) . ' 2>&1';
+            exec($trimCmd, $output, $returnCode);
+
+            if ($returnCode === 0 && file_exists($tempFile)) {
+                unlink($filePath);
+                rename($tempFile, $filePath);
+                echo json_encode(['success' => true]);
+            } else {
+                echo json_encode(['success' => false, 'error' => 'Trim failed']);
+            }
+            exit;
+
+        case 'edit_restore':
+            $filename = $_POST['filename'] ?? '';
+            $filePath = $downloadsDir . '/' . $filename;
+            $backupPath = $downloadsDir . '/backups/' . $filename . '.backup';
+
+            if (!file_exists($backupPath)) {
+                echo json_encode(['success' => false, 'error' => 'No backup available']);
+                exit;
+            }
+
+            copy($backupPath, $filePath);
+            echo json_encode(['success' => true]);
+            exit;
+
+        case 'edit_delete':
+            $filename = $_POST['filename'] ?? '';
+            $filePath = $downloadsDir . '/' . $filename;
+            $metaPath = $filePath . '.meta';
+            $waveformPath = preg_replace('/\.mp3$/', '_waveform.png', $filePath);
+            $backupPath = $downloadsDir . '/backups/' . $filename . '.backup';
+
+            if (file_exists($filePath)) unlink($filePath);
+            if (file_exists($metaPath)) unlink($metaPath);
+            if (file_exists($waveformPath)) unlink($waveformPath);
+            if (file_exists($backupPath)) unlink($backupPath);
+
+            echo json_encode(['success' => true]);
+            exit;
+
+        case 'add_music_bed':
+            $voiceFile = $_POST['voice_file'] ?? '';
+            $bedFile = $_POST['bed_file'] ?? '';
+            $voicePath = $downloadsDir . '/' . $voiceFile;
+            $bedPath = $downloadsDir . '/' . $bedFile;
+
+            if (!file_exists($voicePath) || !file_exists($bedPath)) {
+                echo json_encode(['success' => false, 'error' => 'Files not found']);
+                exit;
+            }
+
+            // Create backup of voice file
+            $backupDir = $downloadsDir . '/backups';
+            if (!is_dir($backupDir)) mkdir($backupDir, 0755, true);
+            $backupPath = $backupDir . '/' . $voiceFile . '.backup';
+            if (!file_exists($backupPath)) {
+                copy($voicePath, $backupPath);
+            }
+
+            // Get duration of voice file
+            $voiceDuration = getAudioDuration($voicePath);
+
+            $tempFile = sys_get_temp_dir() . '/bed_' . uniqid() . '.mp3';
+
+            // Mix: voice at 100% + music bed at 20%, trim bed to voice length
+            $mixCmd = escapeshellcmd($ffmpegPath) .
+                      ' -i ' . escapeshellarg($voicePath) .
+                      ' -i ' . escapeshellarg($bedPath) .
+                      ' -filter_complex "[1:a]volume=0.2,atrim=0:' . $voiceDuration . ',apad=whole_dur=' . $voiceDuration . '[bed];[0:a][bed]amix=inputs=2:duration=first:dropout_transition=2[out]" ' .
+                      '-map "[out]" -ar 44100 -ab 192k ' .
+                      escapeshellarg($tempFile) . ' 2>&1';
+
+            exec($mixCmd, $output, $returnCode);
+
+            if ($returnCode === 0 && file_exists($tempFile)) {
+                unlink($voicePath);
+                rename($tempFile, $voicePath);
+                echo json_encode(['success' => true]);
+            } else {
+                echo json_encode(['success' => false, 'error' => 'Mix failed: ' . implode("\n", $output)]);
+            }
+            exit;
+
+        case 'search_archive':
+            $query = strtolower(trim($_POST['query'] ?? ''));
+            if (strlen($query) < 2) {
+                echo json_encode(['success' => false, 'error' => 'Query too short']);
+                exit;
+            }
+
+            $indexFile = __DIR__ . '/archive_index.json';
+            if (!file_exists($indexFile)) {
+                echo json_encode(['success' => false, 'error' => 'Archive index not found']);
+                exit;
+            }
+
+            $indexData = json_decode(file_get_contents($indexFile), true);
+            $results = [];
+            $count = 0;
+
+            foreach ($indexData['files'] ?? [] as $entry) {
+                $searchText = strtolower(($entry['artist'] ?? '') . ' ' . ($entry['title'] ?? '') . ' ' . ($entry['path'] ?? ''));
+                if (strpos($searchText, $query) !== false) {
+                    $results[] = $entry;
+                    $count++;
+                    if ($count >= 20) break; // Limit results
+                }
+            }
+
+            echo json_encode(['success' => true, 'results' => $results]);
+            exit;
+
+        case 'download_from_archive':
+            $path = $_POST['path'] ?? '';
+            if (empty($path)) {
+                echo json_encode(['success' => false, 'error' => 'Path required']);
+                exit;
+            }
+
+            $filename = basename($path);
+            $outputPath = $downloadsDir . '/' . $filename;
+
+            // Ensure unique filename
+            $counter = 1;
+            $baseName = pathinfo($filename, PATHINFO_FILENAME);
+            $ext = pathinfo($filename, PATHINFO_EXTENSION);
+            while (file_exists($outputPath)) {
+                $filename = $baseName . '_' . $counter . '.' . $ext;
+                $outputPath = $downloadsDir . '/' . $filename;
+                $counter++;
+            }
+
+            // Download from rclone
+            $rcloneCmd = 'rclone copy ' . escapeshellarg('matts-mp3s:/Music/Music/' . $path) . ' ' .
+                        escapeshellarg($downloadsDir) . ' 2>&1';
+            exec($rcloneCmd, $rcloneOutput, $rcloneReturnCode);
+
+            // Handle rename if needed
+            $downloadedPath = $downloadsDir . '/' . basename($path);
+            if ($downloadedPath !== $outputPath && file_exists($downloadedPath)) {
+                rename($downloadedPath, $outputPath);
+            }
+
+            if (file_exists($outputPath)) {
+                // Try to extract artist/title from filename
+                $name = pathinfo($filename, PATHINFO_FILENAME);
+                $artist = '';
+                $title = $name;
+                if (strpos($name, ' - ') !== false) {
+                    list($artist, $title) = explode(' - ', $name, 2);
+                }
+
+                // Create meta file
+                $meta = [
+                    'artist' => trim($artist),
+                    'title' => trim($title),
+                    'album' => '',
+                    'summary' => 'Downloaded from Matt\'s Archive',
+                    'source' => $path,
+                    'downloaded' => date('Y-m-d H:i:s')
+                ];
+                file_put_contents($outputPath . '.meta', json_encode($meta, JSON_PRETTY_PRINT));
+
+                echo json_encode(['success' => true, 'filename' => $filename]);
+            } else {
+                echo json_encode(['success' => false, 'error' => 'Download failed']);
+            }
+            exit;
+
+        case 'search_youtube':
+            $query = trim($_POST['query'] ?? '');
+            if (strlen($query) < 2) {
+                echo json_encode(['success' => false, 'error' => 'Query too short']);
+                exit;
+            }
+
+            // Use yt-dlp to search YouTube
+            $ytdlpPath = '/home/harry/bin/yt-dlp';
+            $searchCmd = escapeshellcmd($ytdlpPath) . ' "ytsearch10:' . escapeshellarg($query) . '" --flat-playlist --dump-json 2>/dev/null';
+
+            $output = [];
+            exec($searchCmd, $output, $returnCode);
+
+            $results = [];
+            foreach ($output as $line) {
+                $data = json_decode($line, true);
+                if ($data && isset($data['url'])) {
+                    $duration = '';
+                    if (isset($data['duration'])) {
+                        $mins = floor($data['duration'] / 60);
+                        $secs = $data['duration'] % 60;
+                        $duration = sprintf('%d:%02d', $mins, $secs);
+                    }
+
+                    $results[] = [
+                        'title' => $data['title'] ?? 'Unknown',
+                        'channel' => $data['channel'] ?? $data['uploader'] ?? '',
+                        'url' => 'https://www.youtube.com/watch?v=' . $data['id'],
+                        'duration' => $duration
+                    ];
+
+                    if (count($results) >= 10) break;
+                }
+            }
+
+            echo json_encode(['success' => true, 'results' => $results]);
+            exit;
+
         case 'create_playlist':
             $name = trim($_POST['name'] ?? '');
             if (empty($name)) {
@@ -1079,12 +1345,36 @@ $availableFiles = getAvailableFiles();
                 <div class="section-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
                     <span style="font-size: 13px; color: #28a745; font-weight: 500;">📁 Upload Track</span>
                 </div>
-                <div style="margin-bottom: 15px;">
+                <div style="margin-bottom: 10px;">
                     <input type="file" id="uploadFile" accept=".mp3,.m4a,.wav,.ogg,.webm" style="display: none;" onchange="uploadTrack()">
                     <button class="btn btn-small btn-outline" onclick="document.getElementById('uploadFile').click()" style="width: 100%;">
                         Choose File to Upload
                     </button>
                     <div id="uploadProgress" style="display: none; margin-top: 8px; font-size: 12px; color: #888;"></div>
+                </div>
+
+                <!-- Search Matt's Archive -->
+                <div class="section-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                    <span style="font-size: 13px; color: #e83e8c; font-weight: 500;">🔍 Search Matt's Archive</span>
+                </div>
+                <div style="margin-bottom: 10px;">
+                    <div style="display: flex; gap: 5px;">
+                        <input type="text" id="archiveSearch" placeholder="Search artist or title..." style="flex: 1; padding: 8px; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); border-radius: 5px; color: #fff; font-size: 13px;">
+                        <button class="btn btn-small btn-primary" onclick="searchArchive()">Search</button>
+                    </div>
+                    <div id="archiveResults" style="display: none; margin-top: 10px; max-height: 150px; overflow-y: auto;"></div>
+                </div>
+
+                <!-- Search YouTube -->
+                <div class="section-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                    <span style="font-size: 13px; color: #ff0000; font-weight: 500;">▶️ Search YouTube</span>
+                </div>
+                <div style="margin-bottom: 15px;">
+                    <div style="display: flex; gap: 5px;">
+                        <input type="text" id="youtubeSearch" placeholder="Search for a song..." style="flex: 1; padding: 8px; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); border-radius: 5px; color: #fff; font-size: 13px;">
+                        <button class="btn btn-small" style="background: #ff0000;" onclick="searchYouTube()">Search</button>
+                    </div>
+                    <div id="youtubeResults" style="display: none; margin-top: 10px; max-height: 150px; overflow-y: auto;"></div>
                 </div>
 
                 <?php
@@ -1107,7 +1397,10 @@ $availableFiles = getAvailableFiles();
                                     <span style="color: #ffc107;"><?= $file['duration_formatted'] ?></span>
                                 </div>
                             </div>
-                            <button class="btn btn-small btn-success add-to-playlist" onclick="addToPlaylist('<?= htmlspecialchars($file['name'], ENT_QUOTES) ?>')">+ Add</button>
+                            <div style="display: flex; gap: 5px;">
+                                <button class="btn btn-small" style="background: rgba(255,255,255,0.1); padding: 5px 8px;" onclick="showEditMenu('<?= htmlspecialchars($file['name'], ENT_QUOTES) ?>', true)" title="Edit">⚙️</button>
+                                <button class="btn btn-small btn-success add-to-playlist" onclick="addToPlaylist('<?= htmlspecialchars($file['name'], ENT_QUOTES) ?>')">+ Add</button>
+                            </div>
                         </div>
                     <?php endforeach; ?>
                 </div>
@@ -1138,7 +1431,10 @@ $availableFiles = getAvailableFiles();
                                         <span style="margin-left: 8px;"><?= round($file['size'] / 1048576, 1) ?> MB</span>
                                     </div>
                                 </div>
-                                <button class="btn btn-small btn-success add-to-playlist" onclick="addToPlaylist('<?= htmlspecialchars($file['name'], ENT_QUOTES) ?>')">+ Add</button>
+                                <div style="display: flex; gap: 5px;">
+                                    <button class="btn btn-small" style="background: rgba(255,255,255,0.1); padding: 5px 8px;" onclick="showEditMenu('<?= htmlspecialchars($file['name'], ENT_QUOTES) ?>', false)" title="Edit">⚙️</button>
+                                    <button class="btn btn-small btn-success add-to-playlist" onclick="addToPlaylist('<?= htmlspecialchars($file['name'], ENT_QUOTES) ?>')">+ Add</button>
+                                </div>
                             </div>
                         <?php endforeach; ?>
                     <?php endif; ?>
@@ -1181,6 +1477,52 @@ $availableFiles = getAvailableFiles();
     </div>
 
     <audio id="audioPlayer"></audio>
+
+    <!-- Edit Track Modal -->
+    <div class="modal" id="editModal">
+        <div class="modal-content" style="width: 450px;">
+            <h3>⚙️ Edit Track</h3>
+            <p id="editTrackName" style="color: #888; margin-bottom: 20px; font-size: 14px; word-break: break-all;"></p>
+
+            <div id="editOptions" style="display: flex; flex-direction: column; gap: 10px;">
+                <button class="btn btn-outline" onclick="editNormalize()" style="text-align: left; padding: 12px 15px;">
+                    🔊 <strong>Normalize</strong>
+                    <span style="display: block; font-size: 12px; color: #888; margin-top: 3px;">Balance volume levels and trim silence</span>
+                </button>
+                <button class="btn btn-outline" onclick="editTrim()" style="text-align: left; padding: 12px 15px;">
+                    ✂️ <strong>Trim Silence</strong>
+                    <span style="display: block; font-size: 12px; color: #888; margin-top: 3px;">Remove silence from beginning and end</span>
+                </button>
+                <button class="btn btn-outline" onclick="editRestore()" style="text-align: left; padding: 12px 15px;">
+                    ↩️ <strong>Restore Original</strong>
+                    <span style="display: block; font-size: 12px; color: #888; margin-top: 3px;">Restore from backup if available</span>
+                </button>
+                <button class="btn btn-outline" onclick="editDelete()" style="text-align: left; padding: 12px 15px; border-color: #dc3545; color: #dc3545;">
+                    🗑️ <strong>Delete Track</strong>
+                    <span style="display: block; font-size: 12px; color: #888; margin-top: 3px;">Permanently remove this file</span>
+                </button>
+            </div>
+
+            <!-- Voice-only: Add Music Bed -->
+            <div id="voiceBedOption" style="display: none; margin-top: 15px; padding-top: 15px; border-top: 1px solid rgba(255,255,255,0.1);">
+                <h4 style="color: #ffc107; margin-bottom: 10px; font-size: 14px;">🎵 Add Instrumental Bed</h4>
+                <p style="font-size: 12px; color: #888; margin-bottom: 10px;">Mix background music at 20% volume under your voice recording</p>
+                <select id="bedTrackSelect" style="width: 100%; padding: 10px; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); border-radius: 5px; color: #fff; font-size: 13px; margin-bottom: 10px;">
+                    <option value="">-- Select a music track --</option>
+                    <?php foreach ($musicTracks as $file): ?>
+                        <option value="<?= htmlspecialchars($file['name'], ENT_QUOTES) ?>">
+                            <?= htmlspecialchars(($file['artist'] ? $file['artist'] . ' - ' : '') . $file['title']) ?>
+                        </option>
+                    <?php endforeach; ?>
+                </select>
+                <button class="btn btn-small btn-success" onclick="addMusicBed()" style="width: 100%;">Add Music Bed</button>
+            </div>
+
+            <div class="modal-actions" style="margin-top: 20px;">
+                <button class="btn btn-outline" onclick="hideEditModal()">Close</button>
+            </div>
+        </div>
+    </div>
 
     <script>
         // Global state
@@ -1622,6 +1964,278 @@ $availableFiles = getAvailableFiles();
                 fileInput.value = '';
             }
         }
+
+        // ====== EDIT TRACK FUNCTIONALITY ======
+        let editingFilename = '';
+        let editingIsVoice = false;
+
+        function showEditMenu(filename, isVoice) {
+            editingFilename = filename;
+            editingIsVoice = isVoice;
+            document.getElementById('editTrackName').textContent = filename;
+            document.getElementById('voiceBedOption').style.display = isVoice ? 'block' : 'none';
+            document.getElementById('editModal').classList.add('active');
+        }
+
+        function hideEditModal() {
+            document.getElementById('editModal').classList.remove('active');
+            editingFilename = '';
+        }
+
+        async function editNormalize() {
+            if (!editingFilename) return;
+            if (!confirm('Normalize this track? This will balance volume and trim silence.')) return;
+
+            hideEditModal();
+            try {
+                const response = await fetch('wombat-playlist.php', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+                    body: 'action=edit_normalize&filename=' + encodeURIComponent(editingFilename)
+                });
+                const data = await response.json();
+                if (data.success) {
+                    alert('Track normalized successfully');
+                    location.reload();
+                } else {
+                    alert('Error: ' + (data.error || 'Normalization failed'));
+                }
+            } catch (err) {
+                alert('Error normalizing track');
+            }
+        }
+
+        async function editTrim() {
+            if (!editingFilename) return;
+            if (!confirm('Trim silence from this track?')) return;
+
+            hideEditModal();
+            try {
+                const response = await fetch('wombat-playlist.php', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+                    body: 'action=edit_trim&filename=' + encodeURIComponent(editingFilename)
+                });
+                const data = await response.json();
+                if (data.success) {
+                    alert('Silence trimmed successfully');
+                    location.reload();
+                } else {
+                    alert('Error: ' + (data.error || 'Trim failed'));
+                }
+            } catch (err) {
+                alert('Error trimming track');
+            }
+        }
+
+        async function editRestore() {
+            if (!editingFilename) return;
+            if (!confirm('Restore original version of this track?')) return;
+
+            hideEditModal();
+            try {
+                const response = await fetch('wombat-playlist.php', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+                    body: 'action=edit_restore&filename=' + encodeURIComponent(editingFilename)
+                });
+                const data = await response.json();
+                if (data.success) {
+                    alert('Original restored successfully');
+                    location.reload();
+                } else {
+                    alert('Error: ' + (data.error || 'Restore failed'));
+                }
+            } catch (err) {
+                alert('Error restoring track');
+            }
+        }
+
+        async function editDelete() {
+            if (!editingFilename) return;
+            if (!confirm('DELETE this track permanently?\n\n' + editingFilename + '\n\nThis cannot be undone!')) return;
+
+            hideEditModal();
+            try {
+                const response = await fetch('wombat-playlist.php', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+                    body: 'action=edit_delete&filename=' + encodeURIComponent(editingFilename)
+                });
+                const data = await response.json();
+                if (data.success) {
+                    alert('Track deleted');
+                    location.reload();
+                } else {
+                    alert('Error: ' + (data.error || 'Delete failed'));
+                }
+            } catch (err) {
+                alert('Error deleting track');
+            }
+        }
+
+        async function addMusicBed() {
+            const bedTrack = document.getElementById('bedTrackSelect').value;
+            if (!bedTrack) {
+                alert('Please select a music track');
+                return;
+            }
+            if (!confirm('Add music bed to this voice recording?\n\nThe music will play at 20% volume under your voice.')) return;
+
+            hideEditModal();
+            try {
+                const response = await fetch('wombat-playlist.php', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+                    body: 'action=add_music_bed&voice_file=' + encodeURIComponent(editingFilename) + '&bed_file=' + encodeURIComponent(bedTrack)
+                });
+                const data = await response.json();
+                if (data.success) {
+                    alert('Music bed added successfully');
+                    location.reload();
+                } else {
+                    alert('Error: ' + (data.error || 'Mix failed'));
+                }
+            } catch (err) {
+                alert('Error adding music bed');
+            }
+        }
+
+        // Close edit modal on backdrop click
+        document.getElementById('editModal').addEventListener('click', function(e) {
+            if (e.target === this) hideEditModal();
+        });
+
+        // ====== ARCHIVE SEARCH FUNCTIONALITY ======
+        async function searchArchive() {
+            const query = document.getElementById('archiveSearch').value.trim();
+            if (query.length < 2) {
+                alert('Please enter at least 2 characters');
+                return;
+            }
+
+            const resultsDiv = document.getElementById('archiveResults');
+            resultsDiv.style.display = 'block';
+            resultsDiv.innerHTML = '<div style="color: #888; padding: 10px;">Searching...</div>';
+
+            try {
+                const response = await fetch('wombat-playlist.php', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+                    body: 'action=search_archive&query=' + encodeURIComponent(query)
+                });
+                const data = await response.json();
+
+                if (data.success && data.results.length > 0) {
+                    let html = '';
+                    data.results.forEach(result => {
+                        const display = (result.artist ? result.artist + ' - ' : '') + result.title;
+                        html += `
+                            <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px; background: rgba(255,255,255,0.05); border-radius: 5px; margin-bottom: 5px;">
+                                <div style="flex: 1; overflow: hidden;">
+                                    <div style="font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${escapeHtml(display)}</div>
+                                    <div style="font-size: 11px; color: #666;">${escapeHtml(result.album || '')}</div>
+                                </div>
+                                <button class="btn btn-small btn-success" onclick="downloadFromArchive('${escapeHtml(result.path)}')" style="flex-shrink: 0; margin-left: 10px;">Download</button>
+                            </div>
+                        `;
+                    });
+                    resultsDiv.innerHTML = html;
+                } else if (data.success) {
+                    resultsDiv.innerHTML = '<div style="color: #888; padding: 10px;">No results found</div>';
+                } else {
+                    resultsDiv.innerHTML = '<div style="color: #dc3545; padding: 10px;">Error: ' + (data.error || 'Search failed') + '</div>';
+                }
+            } catch (err) {
+                resultsDiv.innerHTML = '<div style="color: #dc3545; padding: 10px;">Search failed</div>';
+            }
+        }
+
+        async function downloadFromArchive(path) {
+            if (!confirm('Download this track from Matt\'s Archive?')) return;
+
+            const resultsDiv = document.getElementById('archiveResults');
+            resultsDiv.innerHTML = '<div style="color: #888; padding: 10px;">Downloading...</div>';
+
+            try {
+                const response = await fetch('wombat-playlist.php', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+                    body: 'action=download_from_archive&path=' + encodeURIComponent(path)
+                });
+                const data = await response.json();
+
+                if (data.success) {
+                    alert('Downloaded: ' + data.filename);
+                    location.reload();
+                } else {
+                    alert('Error: ' + (data.error || 'Download failed'));
+                    resultsDiv.innerHTML = '';
+                    resultsDiv.style.display = 'none';
+                }
+            } catch (err) {
+                alert('Download failed');
+            }
+        }
+
+        // Search on Enter key
+        document.getElementById('archiveSearch').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') searchArchive();
+        });
+
+        // ====== YOUTUBE SEARCH FUNCTIONALITY ======
+        async function searchYouTube() {
+            const query = document.getElementById('youtubeSearch').value.trim();
+            if (query.length < 2) {
+                alert('Please enter at least 2 characters');
+                return;
+            }
+
+            const resultsDiv = document.getElementById('youtubeResults');
+            resultsDiv.style.display = 'block';
+            resultsDiv.innerHTML = '<div style="color: #888; padding: 10px;">Searching YouTube...</div>';
+
+            try {
+                const response = await fetch('wombat-playlist.php', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+                    body: 'action=search_youtube&query=' + encodeURIComponent(query)
+                });
+                const data = await response.json();
+
+                if (data.success && data.results.length > 0) {
+                    let html = '';
+                    data.results.forEach(result => {
+                        html += `
+                            <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px; background: rgba(255,255,255,0.05); border-radius: 5px; margin-bottom: 5px;">
+                                <div style="flex: 1; overflow: hidden;">
+                                    <div style="font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${escapeHtml(result.title)}</div>
+                                    <div style="font-size: 11px; color: #666;">${escapeHtml(result.channel)} • ${result.duration || ''}</div>
+                                </div>
+                                <button class="btn btn-small btn-primary" onclick="downloadFromYouTube('${escapeHtml(result.url)}')" style="flex-shrink: 0; margin-left: 10px;">Get MP3</button>
+                            </div>
+                        `;
+                    });
+                    resultsDiv.innerHTML = html;
+                } else if (data.success) {
+                    resultsDiv.innerHTML = '<div style="color: #888; padding: 10px;">No results found</div>';
+                } else {
+                    resultsDiv.innerHTML = '<div style="color: #dc3545; padding: 10px;">Error: ' + (data.error || 'Search failed') + '</div>';
+                }
+            } catch (err) {
+                resultsDiv.innerHTML = '<div style="color: #dc3545; padding: 10px;">Search failed</div>';
+            }
+        }
+
+        function downloadFromYouTube(url) {
+            // Open MP3 Converter with the URL pre-filled
+            window.location.href = 'index.php?url=' + encodeURIComponent(url);
+        }
+
+        // YouTube search on Enter key
+        document.getElementById('youtubeSearch').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') searchYouTube();
+        });
 
         // ====== RECORDER FUNCTIONALITY ======
         let mediaRecorder = null;
