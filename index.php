@@ -440,10 +440,22 @@ if (isset($_POST['reprocess_all'])) {
         $metaPath = $filepath . '.meta';
         $existingMeta = file_exists($metaPath) ? json_decode(file_get_contents($metaPath), true) : [];
         $originalUrl = $existingMeta['url'] ?? '';
+        $videoTitleFromMeta = $existingMeta['video_title'] ?? $videoTitle;
 
-        // Parse with AI
+        // Fetch YouTube channel name if we have a URL
+        $channelName = '';
+        if (!empty($originalUrl) && strpos($originalUrl, 'youtube.com') !== false) {
+            $ytdlpCommand = sprintf(
+                '%s --print channel %s 2>/dev/null',
+                escapeshellarg($ytdlpPath),
+                escapeshellarg($originalUrl)
+            );
+            $channelName = trim(shell_exec($ytdlpCommand) ?? '');
+        }
+
+        // Parse with AI (include channel name for fallback artist)
         if (!empty($openaiApiKey)) {
-            $parsedMetadata = parseVideoTitle($videoTitle, $openaiApiKey, '', '');
+            $parsedMetadata = parseVideoTitle($videoTitleFromMeta, $openaiApiKey, '', $channelName);
 
             if ($parsedMetadata && !empty($parsedMetadata['artist']) && !empty($parsedMetadata['title'])) {
                 // Update MP3 metadata
