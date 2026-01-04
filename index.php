@@ -617,7 +617,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_POST['url'])) {
         $videoDescription = '';
 
         $infoCommand = sprintf(
-            '%s --print title --no-playlist %s 2>/dev/null',
+            '%s --print title --no-playlist --playlist-items 1 %s 2>/dev/null',
             escapeshellarg($ytDlpPath),
             escapeshellarg($url)
         );
@@ -628,7 +628,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_POST['url'])) {
 
         // Get video description for better artist identification
         $descCommand = sprintf(
-            '%s --print description --no-playlist %s 2>/dev/null',
+            '%s --print description --no-playlist --playlist-items 1 %s 2>/dev/null',
             escapeshellarg($ytDlpPath),
             escapeshellarg($url)
         );
@@ -640,7 +640,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_POST['url'])) {
         // Get channel name as fallback artist
         $channelName = '';
         $channelCommand = sprintf(
-            '%s --print channel --no-playlist %s 2>/dev/null',
+            '%s --print channel --no-playlist --playlist-items 1 %s 2>/dev/null',
             escapeshellarg($ytDlpPath),
             escapeshellarg($url)
         );
@@ -654,7 +654,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_POST['url'])) {
 
         // Build yt-dlp command
         $command = sprintf(
-            '%s -x --audio-format mp3 --restrict-filenames --no-playlist --output %s %s 2>&1',
+            '%s -x --audio-format mp3 --restrict-filenames --no-playlist --playlist-items 1 --output %s %s 2>&1',
             escapeshellarg($ytDlpPath),
             escapeshellarg($outputTemplate),
             escapeshellarg($url)

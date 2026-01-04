@@ -4,10 +4,35 @@
  * Create and manage playlists from downloaded MP3s
  */
 
+// Load .env file
+function loadEnv($path) {
+    if (!file_exists($path)) {
+        return;
+    }
+    $lines = file($path, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+    foreach ($lines as $line) {
+        if (strpos(trim($line), '#') === 0) continue;
+        if (strpos($line, '=') !== false) {
+            list($key, $value) = explode('=', $line, 2);
+            $key = trim($key);
+            $value = trim($value);
+            if (preg_match('/^(["\'])(.*)\\1$/', $value, $matches)) {
+                $value = $matches[2];
+            }
+            putenv("$key=$value");
+            $_ENV[$key] = $value;
+        }
+    }
+}
+loadEnv(__DIR__ . '/.env');
+
 $downloadsDir = __DIR__ . '/downloads';
 $downloadsUrl = 'downloads';
 $playlistsFile = __DIR__ . '/playlists.json';
 $ffprobePath = '/home/harry/bin/ffprobe';
+$ytDlpPath = '/home/harry/bin/yt-dlp';
+$ffmpegPath = '/home/harry/bin/ffmpeg';
+$openaiApiKey = getenv('OPENAI_API_KEY');
 
 // Get audio duration in seconds using ffprobe
 function getAudioDuration($filePath) {
@@ -137,7 +162,120 @@ function getAvailableFiles() {
     return $files;
 }
 
-$ffmpegPath = '/home/harry/bin/ffmpeg';
+// Parse video title with OpenAI
+function parseVideoTitle($videoTitle, $apiKey, $description = '', $channelName = '') {
+    if (empty($apiKey)) {
+        return null;
+    }
+
+    $prompt = "Parse this video information and extract information about the song. Pay special attention to who is ACTUALLY PERFORMING the song (especially for covers). Return ONLY a JSON object with these keys:
+- 'artist': The name of the artist/band ACTUALLY PERFORMING (not the original artist if it's a cover)
+  * If no artist is mentioned in the title or description, use the YouTube channel name as the artist
+  * Clean up the channel name to just be the person's name - remove suffixes like '-songwriter', ' Official', ' Music', ' VEVO', ' - Topic', etc.
+- 'title': Song title
+- 'album': Album name (empty string if not mentioned)
+- 'summary': A brief 1-2 sentence description of the song (genre, mood, significance, etc.)
+- 'lyrics_url': A direct URL to lyrics using Genius format: https://genius.com/[Artist]-[song-title]-lyrics
+
+Video title: " . $videoTitle;
+
+    if (!empty($channelName)) {
+        $prompt .= "\n\nYouTube channel name: " . $channelName;
+    }
+    if (!empty($description)) {
+        $prompt .= "\n\nVideo description: " . substr($description, 0, 500);
+    }
+
+    $data = [
+        'model' => 'gpt-4o-mini',
+        'messages' => [['role' => 'user', 'content' => $prompt]],
+        'temperature' => 0.3,
+        'max_tokens' => 400
+    ];
+
+    $ch = curl_init('https://api.openai.com/v1/chat/completions');
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_POST, true);
+    curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($data));
+    curl_setopt($ch, CURLOPT_HTTPHEADER, [
+        'Content-Type: application/json',
+        'Authorization: Bearer ' . $apiKey
+    ]);
+
+    $response = curl_exec($ch);
+    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    curl_close($ch);
+
+    if ($httpCode !== 200) {
+        return null;
+    }
+
+    $result = json_decode($response, true);
+    if (isset($result['choices'][0]['message']['content'])) {
+        $content = $result['choices'][0]['message']['content'];
+        if (preg_match('/\{[\s\S]*?\}/', $content, $matches)) {
+            $parsed = json_decode($matches[0], true);
+            if ($parsed) {
+                return [
+                    'artist' => $parsed['artist'] ?? '',
+                    'title' => $parsed['title'] ?? '',
+                    'album' => $parsed['album'] ?? '',
+                    'summary' => $parsed['summary'] ?? '',
+                    'lyrics_url' => $parsed['lyrics_url'] ?? ''
+                ];
+            }
+        }
+    }
+    return null;
+}
+
+// Update MP3 metadata using ffmpeg
+function updateMp3Metadata($filepath, $metadata, $sourceUrl = '') {
+    global $ffmpegPath;
+    if (empty($metadata)) return false;
+
+    $tempFile = $filepath . '.temp.mp3';
+    $artist = $metadata['artist'] ?? '';
+    $title = $metadata['title'] ?? '';
+    $album = $metadata['album'] ?? '';
+
+    $command = sprintf(
+        '%s -i %s -metadata artist=%s -metadata title=%s -metadata album=%s -metadata comment=%s -codec copy %s 2>&1',
+        escapeshellarg($ffmpegPath),
+        escapeshellarg($filepath),
+        escapeshellarg($artist),
+        escapeshellarg($title),
+        escapeshellarg($album),
+        escapeshellarg($sourceUrl),
+        escapeshellarg($tempFile)
+    );
+
+    exec($command, $output, $returnCode);
+
+    if ($returnCode === 0 && file_exists($tempFile)) {
+        unlink($filepath);
+        rename($tempFile, $filepath);
+        return true;
+    }
+    if (file_exists($tempFile)) {
+        unlink($tempFile);
+    }
+    return false;
+}
+
+// Check if POST was too large (PHP silently discards data when post_max_size exceeded)
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && empty($_POST) && empty($_FILES)) {
+    // Check if this looks like a file upload that was too large
+    $contentLength = isset($_SERVER['CONTENT_LENGTH']) ? (int)$_SERVER['CONTENT_LENGTH'] : 0;
+    $postMaxSize = ini_get('post_max_size');
+    $postMaxBytes = (int)$postMaxSize * (stripos($postMaxSize, 'M') !== false ? 1048576 : (stripos($postMaxSize, 'K') !== false ? 1024 : 1));
+
+    if ($contentLength > $postMaxBytes) {
+        header('Content-Type: application/json');
+        echo json_encode(['success' => false, 'error' => "Upload too large ({$contentLength} bytes). Max is {$postMaxSize}"]);
+        exit;
+    }
+}
 
 // Handle AJAX actions
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
@@ -152,8 +290,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 exit;
             }
 
-            if (!isset($_FILES['audio']) || $_FILES['audio']['error'] !== UPLOAD_ERR_OK) {
-                echo json_encode(['success' => false, 'error' => 'No audio file received']);
+            // Check for file upload errors with descriptive messages
+            if (!isset($_FILES['audio'])) {
+                $maxSize = ini_get('upload_max_filesize');
+                echo json_encode(['success' => false, 'error' => "No audio file received. Max upload size is {$maxSize}"]);
+                exit;
+            }
+
+            $uploadErrors = [
+                UPLOAD_ERR_INI_SIZE => 'File exceeds upload_max_filesize (' . ini_get('upload_max_filesize') . ')',
+                UPLOAD_ERR_FORM_SIZE => 'File exceeds form MAX_FILE_SIZE',
+                UPLOAD_ERR_PARTIAL => 'File was only partially uploaded',
+                UPLOAD_ERR_NO_FILE => 'No file was uploaded',
+                UPLOAD_ERR_NO_TMP_DIR => 'Missing temp folder on server',
+                UPLOAD_ERR_CANT_WRITE => 'Failed to write file to disk',
+                UPLOAD_ERR_EXTENSION => 'Upload blocked by PHP extension'
+            ];
+
+            if ($_FILES['audio']['error'] !== UPLOAD_ERR_OK) {
+                $errorMsg = $uploadErrors[$_FILES['audio']['error']] ?? 'Unknown upload error';
+                echo json_encode(['success' => false, 'error' => $errorMsg]);
                 exit;
             }
 
@@ -547,6 +703,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 exit;
             }
 
+            $searchTitle = ($_POST['search_title'] ?? '1') === '1';
+            $searchArtist = ($_POST['search_artist'] ?? '1') === '1';
+            $searchAlbum = ($_POST['search_album'] ?? '0') === '1';
+
             $indexFile = __DIR__ . '/archive_index.json';
             if (!file_exists($indexFile)) {
                 echo json_encode(['success' => false, 'error' => 'Archive index not found']);
@@ -571,13 +731,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $seen = []; // For deduplication
 
             foreach ($indexData['files'] ?? [] as $entry) {
-                // Build comprehensive search text from all fields
-                $searchText = $normalize(
-                    ($entry['artist'] ?? '') . ' ' .
-                    ($entry['title'] ?? '') . ' ' .
-                    ($entry['album'] ?? '') . ' ' .
-                    ($entry['path'] ?? '')
-                );
+                // Build search text from selected fields only
+                $searchParts = [];
+                if ($searchTitle) $searchParts[] = $entry['title'] ?? '';
+                if ($searchArtist) $searchParts[] = $entry['artist'] ?? '';
+                if ($searchAlbum) $searchParts[] = $entry['album'] ?? '';
+
+                $searchText = $normalize(implode(' ', $searchParts));
 
                 if (strpos($searchText, $queryNormalized) !== false) {
                     // Deduplicate by artist+title combo
@@ -667,6 +827,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             }
 
             // Use yt-dlp to search YouTube
+            putenv('PATH=/home/harry/bin:' . getenv('PATH'));
             $ytdlpPath = '/home/harry/bin/yt-dlp';
             $searchTerm = 'ytsearch10:' . $query;
             $searchCmd = escapeshellarg($ytdlpPath) . ' ' . escapeshellarg($searchTerm) . ' --flat-playlist --dump-json 2>&1';
@@ -707,6 +868,101 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             });
 
             echo json_encode(['success' => true, 'results' => $results]);
+            exit;
+
+        case 'download_youtube':
+            $url = trim($_POST['url'] ?? '');
+            if (empty($url)) {
+                echo json_encode(['success' => false, 'error' => 'No URL provided']);
+                exit;
+            }
+
+            putenv('PATH=/home/harry/bin:' . getenv('PATH'));
+            $outputTemplate = $downloadsDir . '/%(title)s-%(id)s.%(ext)s';
+
+            // Get video info
+            $videoTitle = '';
+            $videoDescription = '';
+            $channelName = '';
+
+            $infoCmd = sprintf('%s --print title --no-playlist --playlist-items 1 %s 2>/dev/null',
+                escapeshellarg($ytDlpPath), escapeshellarg($url));
+            exec($infoCmd, $infoOutput, $infoReturnCode);
+            if ($infoReturnCode === 0 && !empty($infoOutput)) {
+                $videoTitle = trim(implode(' ', $infoOutput));
+            }
+
+            $descCmd = sprintf('%s --print description --no-playlist --playlist-items 1 %s 2>/dev/null',
+                escapeshellarg($ytDlpPath), escapeshellarg($url));
+            exec($descCmd, $descOutput, $descReturnCode);
+            if ($descReturnCode === 0 && !empty($descOutput)) {
+                $videoDescription = trim(implode("\n", $descOutput));
+            }
+
+            $channelCmd = sprintf('%s --print channel --no-playlist --playlist-items 1 %s 2>/dev/null',
+                escapeshellarg($ytDlpPath), escapeshellarg($url));
+            exec($channelCmd, $channelOutput, $channelReturnCode);
+            if ($channelReturnCode === 0 && !empty($channelOutput)) {
+                $channelName = trim(implode(' ', $channelOutput));
+            }
+
+            // Get files before download
+            $filesBefore = glob($downloadsDir . '/*.mp3');
+
+            // Download
+            $downloadCmd = sprintf(
+                '%s -x --audio-format mp3 --restrict-filenames --no-playlist --playlist-items 1 --output %s %s 2>&1',
+                escapeshellarg($ytDlpPath),
+                escapeshellarg($outputTemplate),
+                escapeshellarg($url)
+            );
+            exec($downloadCmd, $downloadOutput, $returnCode);
+
+            if ($returnCode === 0) {
+                $filesAfter = glob($downloadsDir . '/*.mp3');
+                $newFiles = array_diff($filesAfter, $filesBefore);
+
+                if (!empty($newFiles)) {
+                    $filepath = reset($newFiles);
+                    $filename = basename($filepath);
+
+                    // Parse metadata with AI
+                    $parsedMetadata = null;
+                    if (!empty($videoTitle) && !empty($openaiApiKey)) {
+                        $parsedMetadata = parseVideoTitle($videoTitle, $openaiApiKey, $videoDescription, $channelName);
+                        if ($parsedMetadata) {
+                            updateMp3Metadata($filepath, $parsedMetadata, $url);
+                        }
+                    }
+
+                    // Save .meta file
+                    $metaPath = $filepath . '.meta';
+                    $metaData = [
+                        'url' => $url,
+                        'timestamp' => time(),
+                        'video_title' => $videoTitle
+                    ];
+                    if ($parsedMetadata) {
+                        $metaData['artist'] = $parsedMetadata['artist'] ?? '';
+                        $metaData['title'] = $parsedMetadata['title'] ?? '';
+                        $metaData['album'] = $parsedMetadata['album'] ?? '';
+                        $metaData['summary'] = $parsedMetadata['summary'] ?? '';
+                        $metaData['lyrics_url'] = $parsedMetadata['lyrics_url'] ?? '';
+                    }
+                    file_put_contents($metaPath, json_encode($metaData, JSON_PRETTY_PRINT));
+
+                    echo json_encode([
+                        'success' => true,
+                        'filename' => $filename,
+                        'artist' => $metaData['artist'] ?? '',
+                        'title' => $metaData['title'] ?? $videoTitle,
+                        'url' => $downloadsUrl . '/' . rawurlencode($filename)
+                    ]);
+                    exit;
+                }
+            }
+
+            echo json_encode(['success' => false, 'error' => 'Download failed: ' . implode("\n", $downloadOutput)]);
             exit;
 
         case 'import_m3u':
@@ -1614,9 +1870,20 @@ $availableFiles = getAvailableFiles();
                     <span style="font-size: 13px; color: #e83e8c; font-weight: 500;">🔍 Search Matt's Archive</span>
                 </div>
                 <div style="margin-bottom: 10px;">
-                    <div style="display: flex; gap: 5px;">
-                        <input type="text" id="archiveSearch" placeholder="Search artist or title..." style="flex: 1; padding: 8px; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); border-radius: 5px; color: #fff; font-size: 13px;">
+                    <div style="display: flex; gap: 5px; margin-bottom: 8px;">
+                        <input type="text" id="archiveSearch" placeholder="Search..." style="flex: 1; padding: 8px; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); border-radius: 5px; color: #fff; font-size: 13px;">
                         <button class="btn btn-small btn-primary" onclick="searchArchive()">Search</button>
+                    </div>
+                    <div style="display: flex; gap: 12px; font-size: 12px; color: #aaa;">
+                        <label style="display: flex; align-items: center; gap: 4px; cursor: pointer;">
+                            <input type="checkbox" id="searchTitle" checked style="cursor: pointer;"> Title
+                        </label>
+                        <label style="display: flex; align-items: center; gap: 4px; cursor: pointer;">
+                            <input type="checkbox" id="searchArtist" checked style="cursor: pointer;"> Artist
+                        </label>
+                        <label style="display: flex; align-items: center; gap: 4px; cursor: pointer;">
+                            <input type="checkbox" id="searchAlbum" style="cursor: pointer;"> Album
+                        </label>
                     </div>
                     <div id="archiveResults" style="display: none; margin-top: 10px; max-height: 150px; overflow-y: auto;"></div>
                 </div>
@@ -1952,14 +2219,33 @@ $availableFiles = getAvailableFiles();
             });
 
             let html = `
-                <div class="playlist-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; padding-bottom: 10px; border-bottom: 1px solid rgba(255,255,255,0.1);">
-                    <div>
-                        <span style="color: #888; font-size: 13px;">${currentPlaylist.tracks.length} tracks</span>
-                        <span style="color: #667eea; font-size: 13px; margin-left: 10px;">Total: ${formatDuration(totalDuration)}</span>
+                <div class="playlist-header" style="margin-bottom: 15px; padding-bottom: 10px; border-bottom: 1px solid rgba(255,255,255,0.1);">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                        <div>
+                            <span style="color: #888; font-size: 13px;">${currentPlaylist.tracks.length} tracks</span>
+                            <span style="color: #667eea; font-size: 13px; margin-left: 10px;">Total: ${formatDuration(totalDuration)}</span>
+                        </div>
                     </div>
-                    <button class="btn btn-primary btn-small" onclick="mergePlaylist()" id="mergeBtn">
-                        🎚️ Create Full Mix
-                    </button>
+                    <div style="display: flex; gap: 8px; align-items: flex-start;">
+                        <div style="text-align: center;">
+                            <button class="btn btn-success btn-small" onclick="playPlaylistInOrder()" style="width: 40px; height: 40px; border-radius: 50%; font-size: 16px; padding: 0;">
+                                ▶
+                            </button>
+                            <div style="font-size: 10px; color: #888; margin-top: 3px;">Play in order</div>
+                        </div>
+                        <div style="text-align: center;">
+                            <button class="btn btn-primary btn-small" onclick="playPlaylistRandom()" style="width: 40px; height: 40px; border-radius: 50%; font-size: 14px; padding: 0;">
+                                🔀
+                            </button>
+                            <div style="font-size: 10px; color: #888; margin-top: 3px;">Shuffle play</div>
+                        </div>
+                        <div style="text-align: center; margin-left: auto;">
+                            <button class="btn btn-outline btn-small" onclick="mergePlaylist()" id="mergeBtn" style="width: 40px; height: 40px; border-radius: 50%; font-size: 14px; padding: 0;">
+                                🎚️
+                            </button>
+                            <div style="font-size: 10px; color: #888; margin-top: 3px;">Combine into<br>one MP3</div>
+                        </div>
+                    </div>
                 </div>
             `;
 
@@ -1969,13 +2255,14 @@ $availableFiles = getAvailableFiles();
                 const title = fileData?.title || track.filename;
                 const artist = fileData?.artist || '';
                 const duration = fileData?.duration_formatted || '--:--';
+                const isVoiceRecording = artist === 'Voice Recording';
 
                 html += `
                     <div class="track-item" data-filename="${escapeHtml(track.filename)}" data-index="${index}">
                         <div class="drag-handle">☰</div>
                         <div class="track-info" onclick="playTrack(${index})">
-                            <div class="track-title">${escapeHtml(title)}</div>
-                            ${artist ? `<div class="track-artist">${escapeHtml(artist)}</div>` : ''}
+                            <div class="track-title">${isVoiceRecording ? '🎙️ ' : ''}${escapeHtml(title)}</div>
+                            ${artist && !isVoiceRecording ? `<div class="track-artist">${escapeHtml(artist)}</div>` : ''}
                         </div>
                         <div class="track-duration" style="color: #888; font-size: 12px; min-width: 45px; text-align: right;">
                             ${duration}
@@ -2391,6 +2678,33 @@ $availableFiles = getAvailableFiles();
             }, 300);
         }
 
+        function playPlaylistInOrder() {
+            if (!currentPlaylist || currentPlaylist.tracks.length === 0) {
+                alert('No tracks in playlist');
+                return;
+            }
+            playTrack(0);
+        }
+
+        function playPlaylistRandom() {
+            if (!currentPlaylist || currentPlaylist.tracks.length === 0) {
+                alert('No tracks in playlist');
+                return;
+            }
+
+            // Shuffle the tracks
+            const shuffled = [...currentPlaylist.tracks].sort(() => Math.random() - 0.5);
+
+            // Update playlist with shuffled order
+            currentPlaylist.tracks = shuffled;
+
+            // Re-render the track list to show new order
+            displayPlaylistTracks();
+
+            // Start playing
+            playTrack(0);
+        }
+
         function escapeHtml(text) {
             const div = document.createElement('div');
             div.textContent = text;
@@ -2643,6 +2957,15 @@ $availableFiles = getAvailableFiles();
                 return;
             }
 
+            const searchTitle = document.getElementById('searchTitle').checked;
+            const searchArtist = document.getElementById('searchArtist').checked;
+            const searchAlbum = document.getElementById('searchAlbum').checked;
+
+            if (!searchTitle && !searchArtist && !searchAlbum) {
+                alert('Please select at least one field to search');
+                return;
+            }
+
             const resultsDiv = document.getElementById('archiveResults');
             resultsDiv.style.display = 'block';
             resultsDiv.innerHTML = '<div style="color: #888; padding: 10px;">Searching...</div>';
@@ -2651,7 +2974,10 @@ $availableFiles = getAvailableFiles();
                 const response = await fetch('wombat-playlist.php', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-                    body: 'action=search_archive&query=' + encodeURIComponent(query)
+                    body: 'action=search_archive&query=' + encodeURIComponent(query) +
+                          '&search_title=' + (searchTitle ? '1' : '0') +
+                          '&search_artist=' + (searchArtist ? '1' : '0') +
+                          '&search_album=' + (searchAlbum ? '1' : '0')
                 });
                 const data = await response.json();
 
@@ -2659,11 +2985,13 @@ $availableFiles = getAvailableFiles();
                     let html = '';
                     data.results.forEach(result => {
                         const display = (result.artist ? result.artist + ' - ' : '') + result.title;
+                        // Get just the filename without folder path
+                        const filename = result.path.split('/').pop();
                         html += `
                             <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px; background: rgba(255,255,255,0.05); border-radius: 5px; margin-bottom: 5px;">
                                 <div style="flex: 1; overflow: hidden;">
                                     <div style="font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${escapeHtml(display)}</div>
-                                    <div style="font-size: 11px; color: #666;">${escapeHtml(result.album || '')}</div>
+                                    <div style="font-size: 11px; color: #666; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${escapeHtml(filename)}</div>
                                 </div>
                                 <button class="btn btn-small btn-success" onclick="downloadFromArchive('${escapeHtml(result.path)}')" style="flex-shrink: 0; margin-left: 10px;">Download</button>
                             </div>
@@ -2741,7 +3069,7 @@ $availableFiles = getAvailableFiles();
                                     <div style="font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${escapeHtml(result.title)}</div>
                                     <div style="font-size: 11px; color: #666;">${escapeHtml(result.channel)} • ${result.duration || ''}</div>
                                 </div>
-                                <button class="btn btn-small btn-primary" onclick="downloadFromYouTube('${escapeHtml(result.url)}')" style="flex-shrink: 0; margin-left: 10px;">Get MP3</button>
+                                <button class="btn btn-small btn-primary" onclick="downloadFromYouTube(this, '${escapeHtml(result.url)}')" style="flex-shrink: 0; margin-left: 10px;">Get MP3</button>
                             </div>
                         `;
                     });
@@ -2756,9 +3084,64 @@ $availableFiles = getAvailableFiles();
             }
         }
 
-        function downloadFromYouTube(url) {
-            // Open MP3 Converter with the URL pre-filled
-            window.location.href = 'index.php?url=' + encodeURIComponent(url);
+        async function downloadFromYouTube(btn, url) {
+            const originalText = btn.textContent;
+            btn.disabled = true;
+            btn.textContent = 'Downloading...';
+            btn.style.opacity = '0.7';
+
+            try {
+                const response = await fetch('wombat-playlist.php', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+                    body: 'action=download_youtube&url=' + encodeURIComponent(url)
+                });
+                const data = await response.json();
+
+                if (data.success) {
+                    btn.textContent = '✓ Done';
+                    btn.style.background = '#28a745';
+                    btn.style.opacity = '1';
+
+                    // Show success message with track info
+                    const trackInfo = data.artist ? `${data.artist} - ${data.title}` : data.title;
+                    const row = btn.closest('div');
+                    row.innerHTML = `
+                        <div style="flex: 1; overflow: hidden;">
+                            <div style="font-size: 13px; color: #28a745;">✓ Downloaded: ${escapeHtml(trackInfo)}</div>
+                            <div style="font-size: 11px; color: #666;">${escapeHtml(data.filename)}</div>
+                        </div>
+                        <button class="btn btn-small" onclick="addDownloadedToPlaylist('${escapeHtml(data.filename)}')" style="flex-shrink: 0; margin-left: 10px;">Add to Playlist</button>
+                    `;
+
+                    // Refresh the files list
+                    if (typeof loadFiles === 'function') loadFiles();
+                } else {
+                    btn.textContent = 'Failed';
+                    btn.style.background = '#dc3545';
+                    btn.style.opacity = '1';
+                    alert('Download failed: ' + (data.error || 'Unknown error'));
+                    setTimeout(() => {
+                        btn.textContent = originalText;
+                        btn.style.background = '';
+                        btn.disabled = false;
+                    }, 2000);
+                }
+            } catch (err) {
+                btn.textContent = 'Error';
+                btn.style.background = '#dc3545';
+                alert('Download failed: ' + err.message);
+                setTimeout(() => {
+                    btn.textContent = originalText;
+                    btn.style.background = '';
+                    btn.disabled = false;
+                }, 2000);
+            }
+        }
+
+        function addDownloadedToPlaylist(filename) {
+            // Use the existing addToPlaylist function
+            addToPlaylist(filename);
         }
 
         // YouTube search on Enter key
@@ -2934,7 +3317,6 @@ $availableFiles = getAvailableFiles();
 
         function discardRecording() {
             resetRecorder();
-            document.getElementById('recordingStatus').textContent = 'Click the button to start recording';
         }
 
         async function saveRecording() {
@@ -2956,25 +3338,37 @@ $availableFiles = getAvailableFiles();
             formData.append('audio', recordingBlob, 'recording.webm');
 
             try {
-                document.getElementById('recordingStatus').textContent = 'Saving...';
+                const timerEl = document.getElementById('recordingTimer');
+                timerEl.style.display = 'block';
+                timerEl.textContent = 'Saving...';
 
                 const response = await fetch('wombat-playlist.php', {
                     method: 'POST',
                     body: formData
                 });
 
-                const data = await response.json();
+                const text = await response.text();
+                console.log('Server response:', text);
+
+                let data;
+                try {
+                    data = JSON.parse(text);
+                } catch (parseErr) {
+                    console.error('JSON parse error. Response was:', text.substring(0, 500));
+                    alert('Server error: ' + text.substring(0, 200));
+                    return;
+                }
 
                 if (data.success) {
                     alert('Recording saved as: ' + data.filename);
-                    hideRecorderModal();
-                    location.reload(); // Refresh to show new file
+                    resetRecorder();
+                    location.reload();
                 } else {
                     alert('Error saving: ' + (data.error || 'Unknown error'));
                 }
             } catch (err) {
                 console.error('Save error:', err);
-                alert('Error saving recording');
+                alert('Error saving recording: ' + err.message);
             }
         }
 
